@@ -2647,7 +2647,26 @@ function confirmImport(){
    QUIZ
    ============================================================ */
 function startQuick(){
-  startQuiz({mode:ui.setup.mode, scope:ui.setup.scope, count:ui.setup.count, libId:state.activeLibraryId});
+  const round = {mode:ui.setup.mode, scope:ui.setup.scope, count:ui.setup.count, libId:state.activeLibraryId, completed:[]};
+  startQuiz({mode:round.mode, scope:round.scope, count:round.count, libId:round.libId, round:round});
+}
+function roundRemaining(round){
+  if(!round || !state.libraries.some(function(lib){ return lib.id===round.libId; })) return [];
+  const done = new Set(round.completed);
+  return poolFor(round.scope, round.libId).filter(function(w){ return !done.has(w.id); });
+}
+function nextQuizGroup(){
+  const round = ui.quiz && ui.quiz.round;
+  if(!round) { ui.quiz=null; ui.page='quiz'; render(); return; }
+  const words = roundRemaining(round);
+  if(!words.length){ toast('本轮已完成，请重新开始一轮或更换范围','success'); return; }
+  startQuiz({words:words, mode:round.mode, scope:round.scope, count:round.count, libId:round.libId, round:round});
+}
+function restartQuizRound(){
+  const round = ui.quiz && ui.quiz.round;
+  if(!round) return;
+  const fresh = {mode:round.mode, scope:round.scope, count:round.count, libId:round.libId, completed:[]};
+  startQuiz({mode:fresh.mode, scope:fresh.scope, count:fresh.count, libId:fresh.libId, round:fresh});
 }
 function buildQuestion(word, mode, lib){
   const q = {word:word, mode:mode, answered:false, correct:false, userAnswer:'', hintUsed:false, promptSpoken:false, answerSpoken:false, options:[]};
@@ -2687,7 +2706,7 @@ function startQuiz(opts){
   });
   ui.quiz = {
     questions:questions, idx:0, answers:[], finished:false, summary:null,
-    mode:mode, scope:opts.scope||'all', libId:lib.id, startedAt:Date.now()
+    mode:mode, scope:opts.scope||'all', libId:lib.id, round:opts.round||null, roundRetry:!!opts.roundRetry, startedAt:Date.now()
   };
   ui.page = 'quiz';
   window.scrollTo({top:0,behavior:'smooth'});
@@ -2957,6 +2976,11 @@ function finishQuiz(){
   state.sessions.unshift(summary);
   if(state.sessions.length>20) state.sessions.length = 20;
   quiz.finished = true;
+  if(quiz.round && !quiz.roundRetry){
+    const completed = new Set(quiz.round.completed);
+    quiz.questions.forEach(function(q){ completed.add(q.word.id); });
+    quiz.round.completed = Array.from(completed);
+  }
   quiz.summary = summary;
   saveState();
   render();
@@ -2969,6 +2993,8 @@ function renderSummary(){
   const ringColor = acc>=80?'#2f7d5d':acc>=60?'#c79335':'#bf503f';
   const msg = acc>=90?'状态很好，继续用汉译英巩固输出。':acc>=75?'基础不错，把错题连续答对两次就能过关。':acc>=50?'已经记住一半，错题本再走一轮会明显提升。':'别急，先看答案和例句，再用错题重练加深印象。';
   const wrong = s.wrong || [];
+  const remaining = quiz.round ? roundRemaining(quiz.round).length : 0;
+  const nextAction = quiz.round ? (remaining ? '<button class="btn btn-primary" data-action="next-quiz-group">'+icon('play',15)+'继续下一组（剩余 '+remaining+' 词）</button>' : '<span class="hint">本轮范围已练完</span><button class="btn btn-primary" data-action="restart-quiz-round">'+icon('refresh',15)+'重新开始一轮</button>') : '<button class="btn btn-primary" data-action="next-quiz-group">'+icon('play',15)+'开始新练习</button>';
   const wrongHtml = wrong.length ? '<div class="wrong-review"><h3>'+icon('errors',15)+'本次错题 · '+wrong.length+' 个</h3>'+wrong.map(function(a){
     return '<div class="wrong-mini"><b>'+esc(a.en)+'</b><span>'+esc(a.cn)+'</span><span class="why">'+(a.userAnswer?'你写：'+esc(a.userAnswer):'未作答')+'</span></div>';
   }).join('')+'</div>' : '<div class="wrong-review" style="text-align:center;color:var(--muted);font-size:11px;padding:14px 0"><div style="display:flex;justify-content:center;margin-bottom:5px">'+icon('spark',18)+'</div><div>本次全对，没有新增错题。</div></div>';
@@ -2977,7 +3003,7 @@ function renderSummary(){
       '<div class="summary-copy"><div class="kicker">Session Complete</div><h2>'+(acc>=80?'这组练得很扎实':acc>=50?'完成一组，继续巩固':'完成比完美更重要')+'</h2><p>'+msg+'</p></div></div>'+
     '<div class="summary-stats"><div class="summary-stat"><b>'+s.correct+'</b><span>答对</span></div><div class="summary-stat"><b>'+(s.total-s.correct)+'</b><span>答错</span></div><div class="summary-stat"><b>'+fmtDuration(s.duration)+'</b><span>用时</span></div><div class="summary-stat"><b>'+wrong.length+'</b><span>本次错题</span></div></div>'+
     wrongHtml+
-    '<div class="summary-actions">'+(wrong.length?'<button class="btn btn-primary" data-action="retry-wrong">'+icon('refresh',15)+'再练本次错题</button>':'<button class="btn btn-primary" data-action="start-quick">'+icon('refresh',15)+'再练一组</button>')+'<button class="btn btn-ghost" data-action="go" data-page="errors">'+icon('errors',15)+'错题本</button><button class="btn btn-ghost" data-action="exit-quiz">'+icon('home',15)+'返回首页</button></div>'+
+    '<div class="summary-actions">'+nextAction+(wrong.length?'<button class="btn btn-ghost" data-action="retry-wrong">'+icon('refresh',15)+'再练本次错题</button>':'')+'<button class="btn btn-ghost" data-action="go" data-page="errors">'+icon('errors',15)+'错题本</button><button class="btn btn-ghost" data-action="exit-quiz">'+icon('home',15)+'返回首页</button></div>'+ 
     '<div class="tiny muted" style="text-align:center;margin-top:12px">'+esc(fmtDateTime(s.finishedAt))+' · '+esc(modeLabel(s.mode))+' · '+esc(scopeLabel(s.scope))+'</div>'+
   '</div>';
 }
@@ -2987,7 +3013,7 @@ function retryWrong(){
   const ids = new Set(quiz.summary.wrong.map(function(a){return a.wordId;}));
   const words = quiz.questions.filter(function(q){return ids.has(q.word.id);}).map(function(q){return q.word;});
   if(!words.length){ toast('本次没有错题','success'); return; }
-  startQuiz({words:words, mode:quiz.mode, scope:'errors', count:words.length, libId:quiz.libId});
+  startQuiz({words:words, mode:quiz.mode, scope:'errors', count:words.length, libId:quiz.libId, round:quiz.round, roundRetry:true});
 }
 function exitQuiz(){
   clearTimeout(ui.autoNextTimer);
@@ -3303,6 +3329,8 @@ document.addEventListener('click', function(e){
   if(action==='next-question'){ nextQuestion(); return; }
   if(action==='exit-quiz'){ exitQuiz(); return; }
   if(action==='retry-wrong'){ retryWrong(); return; }
+  if(action==='next-quiz-group'){ nextQuizGroup(); return; }
+  if(action==='restart-quiz-round'){ restartQuizRound(); return; }
   if(action==='error-filter'){
     ui.errorFilter = el.dataset.filter; render(); return;
   }
