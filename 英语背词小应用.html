@@ -484,19 +484,21 @@ dialog{
   border:0;padding:0;background:var(--surface);color:var(--ink);
   width:min(550px,calc(100vw - 30px));max-width:calc(100vw - 30px);
   max-height:calc(100vh - 36px);border-radius:20px;box-shadow:var(--shadow-lg);
-  overflow:hidden;
+  overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
 }
+@supports (height:100dvh){dialog{max-height:calc(100dvh - 36px)}}
 dialog.lg{width:min(860px,calc(100vw - 30px))}
 dialog.sm{width:min(430px,calc(100vw - 30px))}
 dialog::backdrop{background:rgba(17,36,29,.52);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
-dialog[open]{display:flex;flex-direction:column;animation:popIn .18s ease-out}
+dialog[open]{display:block;animation:popIn .18s ease-out}
 @keyframes popIn{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
 .modal-head{display:flex;align-items:flex-start;gap:14px;padding:21px 23px 15px;flex:none}
 .modal-head-text{min-width:0}
 .modal-head h2{font-family:var(--serif);font-size:20px;line-height:1.25;font-weight:700}
 .modal-head p{font-size:11.5px;line-height:1.6;color:var(--muted);margin-top:4px}
 .modal-close{margin-left:auto;flex:none;margin-top:-3px}
-.modal-body{padding:2px 23px 20px;overflow:auto;flex:1}
+/* Scroll the whole dialog rather than sizing a flex child inside an auto-height dialog. */
+.modal-body{padding:2px 23px 20px}
 .modal-foot{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:14px 23px;border-top:1px solid var(--line);background:#fbf8f0;flex:none;flex-wrap:wrap}
 .modal-foot .left-note{margin-right:auto;font-size:10.5px;color:var(--muted)}
 
