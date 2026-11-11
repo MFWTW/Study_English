@@ -1416,6 +1416,7 @@ function defaultState(){
     libraries:libs,
     activeLibraryId:libs[0].id,
     stats:{},
+    mastery:{},
     errorBook:[],
     sessions:[],
     daily:{date:todayKey(), count:0, correct:0},
@@ -1467,7 +1468,8 @@ function normalizeErrorBook(s){
       if(!previous.phonetic) previous.phonetic = raw.phonetic || (source && source.phonetic) || '';
       if(!previous.example) previous.example = raw.example || (source && source.example) || '';
       if(!previous.exampleCn) previous.exampleCn = raw.exampleCn || (source && source.exampleCn) || '';
-      if(!raw.mastered){ previous.mastered = false; previous.correctStreak = 0; }
+      previous.mastered = !!(previous.mastered && raw.mastered);
+      previous.correctStreak = Math.max(progressNumber(previous.correctStreak), progressNumber(raw.correctStreak));
       return;
     }
     const id = raw.id || uid('e');
@@ -1480,6 +1482,10 @@ function normalizeErrorBook(s){
     if(key) byKey.set(key, entry);
   });
   return result;
+}
+function progressNumber(value){
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.min(5, Math.floor(n))) : 0;
 }
 function normalizeState(s){
   const oldVersion = Number(s.version) || 1;
@@ -1499,6 +1505,29 @@ function normalizeState(s){
   if(!s.libraries.some(function(l){return l.id===s.activeLibraryId;})) s.activeLibraryId = s.libraries[0].id;
   s.stats = s.stats && typeof s.stats==='object' ? s.stats : {};
   s.errorBook = normalizeErrorBook(s);
+  // Legacy per-ID histories cannot be replayed across libraries. Preserve the
+  // highest available progress (and any previously mastered state), never add histories.
+  const existing = s.mastery && typeof s.mastery==='object' && !Array.isArray(s.mastery) ? s.mastery : null;
+  const mastery = Object.create(null);
+  if(existing){ Object.keys(existing).forEach(function(k){ const key=errorKey(k); if(key) mastery[key]=Math.max(mastery[key]||0, progressNumber(existing[k])); }); }
+  else {
+    s.libraries.forEach(function(lib){ lib.words.forEach(function(w){
+      const st=s.stats[w.id], key=errorKey(w.en); if(!st || !key) return;
+      const right=Math.max(0,Number(st.right)||0), wrong=Math.max(0,Number(st.wrong)||0);
+      if(!right && !wrong) return;
+      const oldError=s.errorBook.find(function(e){return errorKey(e.en)===key;});
+      const legacyMastered=(!oldError || oldError.mastered) && right>=3 && right/(right+wrong)>=0.7;
+      mastery[key]=Math.max(mastery[key]||0, legacyMastered?5:progressNumber(st.streak));
+    }); });
+    s.errorBook.forEach(function(e){
+      const key=errorKey(e.en); if(!key) return;
+      // An open legacy error always remains open; old per-ID streaks can be stale.
+      const n=Math.max(mastery[key]||0, progressNumber(e.correctStreak));
+      mastery[key]=e.mastered ? 5 : Math.min(4,n);
+    });
+  }
+  s.mastery=mastery;
+  s.errorBook.forEach(function(e){ const n=progressNumber(mastery[errorKey(e.en)]); e.correctStreak=n; e.mastered=n===5; });
   s.quizRounds = Array.isArray(s.quizRounds) ? s.quizRounds.filter(function(r){return r && typeof r.libId==='string' && typeof r.scope==='string' && typeof r.mode==='string' && Array.isArray(r.completed);}).map(function(r){return {libId:r.libId,scope:r.scope,mode:r.mode,completed:Array.from(new Set(r.completed.filter(function(id){return typeof id==='string';})))};}) : [];
   s.sessions = Array.isArray(s.sessions) ? s.sessions : [];
   s.studyDays = Array.isArray(s.studyDays) ? s.studyDays : [];
@@ -1620,11 +1649,20 @@ function findWord(id){
 function errorWord(e){
   return {id:e.wordId, errorId:e.id, en:e.en, cn:e.cn, phonetic:e.phonetic||'', example:e.example||'', exampleCn:e.exampleCn||'', libraryId:null};
 }
+function masteryOf(word){ return progressNumber(state.mastery && state.mastery[errorKey(word && word.en)]); }
+function setMastery(word, value){
+  const key=errorKey(word && word.en); if(!key) return 0;
+  if(!state.mastery) state.mastery=Object.create(null);
+  const n=progressNumber(value); Object.defineProperty(state.mastery,key,{value:n,writable:true,enumerable:true,configurable:true});
+  const e=state.errorBook.find(function(x){return errorKey(x.en)===key;});
+  if(e){ e.correctStreak=n; e.mastered=n===5; if(n===5) e.masteredAt=Date.now(); else e.masteredAt=null; }
+  return n;
+}
 function saveIndependentError(word){
   const key = errorKey(word && word.en);
   if(!key || !currentAccount || !Array.isArray(state.errorBook)) return {ok:false};
   let entry = state.errorBook.find(function(e){return errorKey(e.en)===key;});
-  const repeated = !!entry, before = entry ? Object.assign({},entry) : null, oldSavedAt = state.lastSavedAt;
+  const repeated = !!entry, before = entry ? Object.assign({},entry) : null, oldSavedAt = state.lastSavedAt, hadMastery = Object.prototype.hasOwnProperty.call(state,'mastery'), oldMastery = Object.assign(Object.create(null), state.mastery||{});
   const now = Date.now();
   if(!entry){
     const id = uid('e');
@@ -1633,12 +1671,13 @@ function saveIndependentError(word){
   }
   entry.cn = String(word.cn||entry.cn||'').trim();
   entry.wrongCount = (Number(entry.wrongCount)||0)+1;
-  entry.correctStreak = 0; entry.mastered = false; entry.lastWrongAt = now;
+  // 收藏是标记不会而不是作答；仅将已掌握的词退回待攻克。
+  setMastery(word, Math.min(4, masteryOf(word))); entry.lastWrongAt = now;
   saveState();
   if(!storageOK){
     if(repeated){ Object.keys(entry).forEach(function(k){delete entry[k];}); Object.assign(entry,before); }
     else state.errorBook.splice(state.errorBook.indexOf(entry),1);
-    state.lastSavedAt = oldSavedAt;
+    state.lastSavedAt = oldSavedAt; if(hadMastery) state.mastery = oldMastery; else delete state.mastery;
     return {ok:false};
   }
   return {ok:true, entry:entry, repeated:repeated};
@@ -1677,31 +1716,27 @@ function libStats(lib){
   let learned=0, mastered=0, weak=0;
   for(const w of words){
     const s = state.stats[w.id];
-    if(!s) continue;
-    if(s.right+s.wrong>0) learned++;
+    if(statusOf(w).key!=='new') learned++;
     if(statusOf(w).key==='mastered') mastered++;
-    if(s.weak) weak++;
+    if(s && s.weak) weak++;
   }
   return {total:words.length, learned:learned, mastered:mastered, weak:weak, errors:words.filter(function(w){const e=errorEntryOf(w.id); return e && !e.mastered;}).length};
 }
 function statusOf(word){
-  const s = state.stats[word.id];
-  const attempts = s ? s.right+s.wrong : 0;
-  const entry = errorEntryOf(word.id);
-  const open = entry && !entry.mastered;
-  const masteredEntry = entry && entry.mastered;
-  if(!attempts) return {key:'new', label:'未学', cls:'badge-gray'};
-  if(open) return {key:'review', label:'待巩固', cls:'badge-red'};
-  if(masteredEntry) return {key:'mastered', label:'已掌握', cls:'badge-green'};
-  if(s && s.streak===0) return {key:'review', label:'待巩固', cls:'badge-red'};
-  const acc = s ? s.right/(s.right+s.wrong) : 0;
-  if(s && s.right>=3 && acc>=0.7) return {key:'mastered', label:'已掌握', cls:'badge-green'};
-  return {key:'learning', label:'学习中', cls:'badge-amber'};
+  const key=errorKey(word && word.en), n=masteryOf(word), entry=errorEntryOf(word.id);
+  if(!state.mastery){
+    const s=state.stats[word.id], attempts=s ? (Number(s.right)||0)+(Number(s.wrong)||0) : 0;
+    if(!attempts && !entry) return {key:'new', label:'未学', cls:'badge-gray'};
+    if(!entry && attempts) return {key:'learning', label:'学习中', cls:'badge-amber'};
+  }
+  if(n===5) return {key:'mastered', label:'已掌握', cls:'badge-green'};
+  if(entry || (state.mastery && Object.prototype.hasOwnProperty.call(state.mastery,key) && n===0)) return {key:'review', label:'待巩固', cls:'badge-red'};
+  if(n>0 || (state.mastery && Object.prototype.hasOwnProperty.call(state.mastery,key))) return {key:'learning', label:'学习中', cls:'badge-amber'};
+  return {key:'new', label:'未学', cls:'badge-gray'};
 }
 function masteryDots(word){
-  const s = state.stats[word.id];
-  const n = statusOf(word).key==='mastered' ? 5 : (s ? Math.min(5, s.right) : 0);
-  let html = '<div class="mastery-dots" title="累计答对 '+n+' 次">';
+  const n=masteryOf(word);
+  let html = '<div class="mastery-dots" title="掌握进度 '+n+'/5">';
   for(let i=0;i<5;i++) html += '<span class="mdot'+(i<n?(n>=5?' on full':' on'):'')+'"></span>';
   return html+'</div>';
 }
@@ -1709,7 +1744,7 @@ function poolFor(scope, libId){
   if(scope==='errors') return state.errorBook.filter(function(e){return !e.mastered;}).map(errorWord);
   const lib = getLib(libId);
   const words = lib ? lib.words.slice() : [];
-  if(scope==='new') return words.filter(function(w){ const s=state.stats[w.id]; return !s || (s.right+s.wrong)===0; });
+  if(scope==='new') return words.filter(function(w){ return statusOf(w).key==='new'; });
   if(scope==='weak') return words.filter(function(w){ const s=state.stats[w.id]; return s && s.weak; });
   return words;
 }
@@ -1984,15 +2019,15 @@ function renderHome(){
   '</div>'+
   '<div class="stats-row">'+
     statCard('book','green',ls.total,'当前词库词汇','含 '+state.libraries.length+' 个自定义 / 内置词库')+
-    statCard('layers','blue',ls.learned,'已开始学习','掌握度按累计答对次数计算')+
+    statCard('layers','blue',ls.learned,'已开始学习','答对加一点，答错减一点')+
     statCard('star','amber',errorBookWeakCount(),'薄弱生词','错题本中自动标记或手动星标的词')+
-    statCard('errors','red',openErrorCount(),'待攻克错题','整个错题本 · 连续答对 2 次移入已掌握')+
+    statCard('errors','red',openErrorCount(),'待攻克错题','整个错题本 · 进度达到 5 点移入已掌握')+
   '</div>'+
   '<div class="home-bottom">'+
     '<section class="card card-pad"><div class="card-head"><div class="card-title">'+icon('clock',17)+'最近练习</div><button class="btn btn-ghost btn-sm" data-action="go" data-page="quiz">'+icon('practice',14)+'去刷题</button></div><div class="session-list">'+sessionsHtml+'</div></section>'+
     '<section class="card card-pad"><div class="card-head"><div class="card-title">'+icon('lightbulb',17)+'今日复盘清单</div><span class="badge badge-amber">'+streak+' 天连学</span></div>'+
       '<div class="tip-list">'+
-        '<div class="tip-item"><div class="tip-num">1</div><div><b>先清错题。</b>打开错题本，把「待攻克」的词重练一遍，连续答对 2 次才算过关。</div></div>'+
+        '<div class="tip-item"><div class="tip-num">1</div><div><b>先清错题。</b>打开错题本，把「待攻克」的词重练一遍，进度达到 5 点才算过关。</div></div>'+
         '<div class="tip-item"><div class="tip-num">2</div><div><b>再做新词。</b>用英译汉快速过一遍，卡住的词立刻加星，晚上重点看。</div></div>'+
         '<div class="tip-item"><div class="tip-num">3</div><div><b>最后输出。</b>用汉译英默写 10 个薄弱词，写不出来就回到错题本。</div></div>'+
       '</div>'+
@@ -2941,10 +2976,8 @@ function renderFeedback(q){
   const weak = s.weak;
   let note = '';
   if(q.correct){
-    if(q.masteredNow) note = '错题已掌握，移入「已掌握」';
-    else if(entry && !entry.mastered) note = '错题掌握进度 '+(entry.correctStreak||0)+'/2';
-    else if(s.streak>1) note = '连续答对 '+s.streak+' 次';
-    else note = '已计入今日进度';
+    if(q.masteredNow) note = '掌握进度达到 5/5';
+    else note = '掌握进度 '+masteryOf(w)+'/5';
   }else{
     note = q.newError ? '已自动记入错题本' : '错题错误次数 +1';
     if(q.autoWeak) note += ' · 已标记薄弱';
@@ -3011,14 +3044,16 @@ function revealAnswer(){
 }
 function finalizeAnswer(q, correct, userAnswer){
   if(q.answered) return;
-  q.answered = true; q.correct = !!correct; q.userAnswer = String(userAnswer||''); q.answeredAt = Date.now();
-  ui.quiz.answers.push({wordId:q.word.id, en:q.word.en, cn:q.word.cn, correct:!!correct, userAnswer:q.userAnswer, mode:q.mode});
-  const outcome = recordLearning(q.word, !!correct);
-  q.newError = outcome.newError; q.autoWeak = outcome.autoWeak;
-  q.masteredNow = outcome.masteredNow; q.progress = outcome.correctStreak;
-  const round = ui.quiz.round;
+  const before=JSON.stringify(state);
+  const round=ui.quiz.round, completed=round ? round.completed.slice() : null;
+  const outcome=recordLearning(q.word, !!correct);
   if(round && !ui.quiz.roundRetry && !round.completed.includes(q.word.id)) round.completed.push(q.word.id);
   saveState();
+  if(typeof storageOK!=='undefined' && !storageOK){ state=JSON.parse(before); if(round) round.completed=completed; render(); return; }
+  q.answered=true; q.correct=!!correct; q.userAnswer=String(userAnswer||''); q.answeredAt=Date.now();
+  ui.quiz.answers.push({wordId:q.word.id, en:q.word.en, cn:q.word.cn, correct:!!correct, userAnswer:q.userAnswer, mode:q.mode});
+  q.newError=outcome.newError; q.autoWeak=outcome.autoWeak;
+  q.masteredNow=outcome.masteredNow; q.progress=outcome.correctStreak;
   render();
 }
 function recordLearning(word, correct){
@@ -3029,38 +3064,28 @@ function recordLearning(word, correct){
   s.lastSeen = Date.now();
   s.lastResult = correct ? 'correct' : 'wrong';
   if(correct){
-    s.right++;
-    s.streak++;
+    s.right = (Number(s.right)||0)+1;
+    s.streak = (Number(s.streak)||0)+1;
   }else{
-    s.wrong++;
+    s.wrong = (Number(s.wrong)||0)+1;
     s.streak = 0;
     if(s.wrong>=2 && !s.weak){ s.weak = true; s.weakAuto = true; outcome.autoWeak = true; }
   }
-  state.daily.count++;
-  if(correct) state.daily.correct++;
+  state.daily.count = (Number(state.daily.count)||0)+1;
+  if(correct) state.daily.correct = (Number(state.daily.correct)||0)+1;
   touchStudyDay();
   let entry = hadError;
-  if(correct){
-    if(entry && !entry.mastered){
-      entry.correctStreak = (entry.correctStreak||0)+1;
-      entry.lastCorrectAt = Date.now();
-      outcome.correctStreak = entry.correctStreak;
-      if(entry.correctStreak>=2){
-        entry.mastered = true; entry.masteredAt = Date.now();
-        outcome.masteredNow = true;
-      }
-    }
-  }else{
-    if(!entry){
-      const id = uid('e');
-      entry = {id:id, wordId:'error:'+id, libraryId:null, en:word.en, cn:word.cn, phonetic:word.phonetic||'', example:word.example||'', exampleCn:word.exampleCn||'', wrongCount:0, correctStreak:0, mastered:false, createdAt:Date.now(), lastWrongAt:Date.now()};
-      state.errorBook.push(entry);
-      outcome.newError = true;
-    }
-    entry.wrongCount = (entry.wrongCount||0)+1;
-    entry.correctStreak = 0;
-    entry.mastered = false;
-    entry.lastWrongAt = Date.now();
+  const previous=masteryOf(word);
+  if(!correct && !entry){
+    const id=uid('e');
+    entry={id:id, wordId:'error:'+id, libraryId:null, en:word.en, cn:word.cn, phonetic:word.phonetic||'', example:word.example||'', exampleCn:word.exampleCn||'', wrongCount:0, correctStreak:0, mastered:false, createdAt:Date.now()};
+    state.errorBook.push(entry); outcome.newError=true;
+  }
+  const progress=setMastery(word, previous+(correct?1:-1));
+  outcome.correctStreak=progress; outcome.masteredNow=previous<5 && progress===5;
+  if(entry){
+    if(correct) entry.lastCorrectAt=Date.now();
+    else { entry.wrongCount=(Number(entry.wrongCount)||0)+1; entry.lastWrongAt=Date.now(); }
   }
   return outcome;
 }
@@ -3106,7 +3131,7 @@ function renderSummary(){
   if(!s) return '';
   const acc = s.accuracy;
   const ringColor = acc>=80?'#2f7d5d':acc>=60?'#c79335':'#bf503f';
-  const msg = acc>=90?'状态很好，继续用汉译英巩固输出。':acc>=75?'基础不错，把错题连续答对两次就能过关。':acc>=50?'已经记住一半，错题本再走一轮会明显提升。':'别急，先看答案和例句，再用错题重练加深印象。';
+  const msg = acc>=90?'状态很好，继续用汉译英巩固输出。':acc>=75?'基础不错，把错题进度达到五点就能过关。':acc>=50?'已经记住一半，错题本再走一轮会明显提升。':'别急，先看答案和例句，再用错题重练加深印象。';
   const wrong = s.wrong || [];
   const remaining = quiz.round ? roundRemaining(quiz.round).length : 0;
   const nextAction = quiz.round ? (remaining ? '<button class="btn btn-primary" data-action="next-quiz-group">'+icon('play',15)+'继续下一组（剩余 '+remaining+' 词）</button>' : '<span class="hint">本轮范围已练完</span><button class="btn btn-primary" data-action="restart-quiz-round">'+icon('refresh',15)+'重新开始一轮</button>') : '<button class="btn btn-primary" data-action="next-quiz-group">'+icon('play',15)+'开始新练习</button>';
@@ -3204,12 +3229,12 @@ function errorListData(){
 function errorRowHtml(e){
   const lib = state.libraries.find(function(l){return l.id===e.libraryId;});
   const word = findWord(e.wordId);
-  const streak = e.correctStreak||0;
-  const prog = Math.min(2,streak);
+  const prog = e.mastered ? 5 : Math.max(0, Math.min(5, Math.floor(Number(e.correctStreak)||0)));
+  const dots = Array.from({length:5}, function(_, i){ return '<span class="mdot'+(i<prog?(prog===5?' on full':' on'):'')+'"></span>'; }).join('');
   return '<div class="error-row">'+
     '<div class="error-main"><div class="error-avatar">'+esc((e.en||'?').slice(0,1).toUpperCase())+'</div><div style="min-width:0"><div class="error-word">'+esc(e.en)+'</div><div class="error-cn">'+esc(e.cn)+'</div>'+
       '<div class="error-meta"><span>错 '+(e.wrongCount||0)+' 次</span><span class="sep"></span><span>'+esc('独立错题本')+'</span><span class="sep"></span><span>'+esc(fmtRelative(e.lastWrongAt))+'</span>'+(e.mastered?'<span class="badge badge-green" style="font-size:9px;padding:2px 6px">已掌握</span>':'')+'</div></div></div>'+
-    '<div class="error-side"><div class="error-progress"><span>掌握进度</span><div class="bar"><i style="width:'+(prog/2*100)+'%"></i></div><span>'+prog+'/2</span></div>'+
+    '<div class="error-side"><div class="error-progress"><span>掌握进度</span><div class="mastery-dots" role="img" aria-label="掌握进度 '+prog+'，共 5 点">'+dots+'</div><span>'+prog+'/5</span>'+'</div>'+
       '<div class="error-actions">'+'<button class="icon-btn sm" data-action="speak-text" data-text="'+esc(e.en)+'" title="朗读单词" aria-label="朗读单词">'+icon('volume',14)+'</button>'+(word?'<button class="btn btn-soft" data-action="error-practice" data-id="'+e.wordId+'">练一下</button>':'<button class="btn btn-ghost" disabled>词条已删</button>')+'<button class="btn btn-ghost" data-action="error-master" data-id="'+e.wordId+'">'+(e.mastered?'重新攻克':'标记已掌握')+'</button><button class="icon-btn sm danger" data-action="error-remove" data-id="'+e.wordId+'" title="移出错题本">'+icon('trash',14)+'</button></div>'+
     '</div>'+
   '</div>';
@@ -3261,12 +3286,12 @@ function renderErrors(){
       '</div>'+
       '<div class="error-hint">左右滑动切换页面 · 每页最多 10 条，共 '+list.length+' 条</div>'+
     '</div>' :
-    '<div class="empty"><div class="empty-icon">'+icon('errors',26)+'</div><h3>'+(q?'没有匹配的错题':ui.errorFilter==='mastered'?'还没有已掌握的错题':'还没有待攻克的错题')+'</h3><p>'+(q?'试试别的关键词，或切换筛选条件。':'刷题时答错的词会自动出现在这里。连续答对 2 次后移入「已掌握」。')+'</p><button class="btn btn-primary btn-sm" '+(open.length?'data-action="start-errors"':'data-action="go" data-page="quiz"')+'>'+icon(open.length?'refresh':'play',14)+(open.length?'开始错题重练':'去刷一组题')+'</button></div>';
-  return '<div class="page-actions"><div class="left"><div class="page-intro">错题自动留存，不用手动抄。优先清「待攻克」，连续答对 2 次即可移入已掌握。</div></div><div class="right">'+(mastered.length?'<button class="btn btn-ghost" data-action="clear-mastered">'+icon('trash',15)+'清空已掌握</button>':'')+(open.length?'<button class="btn btn-primary" data-action="start-errors">'+icon('refresh',15)+'开始错题重练</button>':'')+'</div></div>'+
+    '<div class="empty"><div class="empty-icon">'+icon('errors',26)+'</div><h3>'+(q?'没有匹配的错题':ui.errorFilter==='mastered'?'还没有已掌握的错题':'还没有待攻克的错题')+'</h3><p>'+(q?'试试别的关键词，或切换筛选条件。':'刷题时答错的词会自动出现在这里。进度达到 5 点后移入「已掌握」。')+'</p><button class="btn btn-primary btn-sm" '+(open.length?'data-action="start-errors"':'data-action="go" data-page="quiz"')+'>'+icon(open.length?'refresh':'play',14)+(open.length?'开始错题重练':'去刷一组题')+'</button></div>';
+  return '<div class="page-actions"><div class="left"><div class="page-intro">错题自动留存，不用手动抄。优先清「待攻克」，进度达到 5 点即可移入已掌握。</div></div><div class="right">'+(mastered.length?'<button class="btn btn-ghost" data-action="clear-mastered">'+icon('trash',15)+'清空已掌握</button>':'')+(open.length?'<button class="btn btn-primary" data-action="start-errors">'+icon('refresh',15)+'开始错题重练</button>':'')+'</div></div>'+
     '<div class="error-kpis">'+
       '<div class="card error-kpi"><div class="stat-icon red">'+icon('errors',17)+'</div><div><b>'+open.length+'</b><span>待攻克错题</span></div></div>'+
       '<div class="card error-kpi"><div class="stat-icon green">'+icon('check',17)+'</div><div><b>'+mastered.length+'</b><span>已掌握</span></div></div>'+
-      '<div class="card error-kpi"><div class="stat-icon amber">'+icon('refresh',17)+'</div><div><b>'+totalWrong+'</b><span>累计答错次数</span></div></div>'+
+      '<div class="card error-kpi"><div class="stat-icon amber">'+icon('refresh',17)+'</div><div><b>'+totalWrong+'</b><span>累计标错次数（含收藏）</span></div></div>'+
       '<div class="card error-kpi"><div class="stat-icon blue">'+icon('chart',17)+'</div><div><b>'+(state.errorBook.length?Math.round(mastered.length/state.errorBook.length*100):0)+'%</b><span>错题攻克率</span></div></div>'+
     '</div>'+
     '<div class="error-layout">'+
@@ -3274,7 +3299,7 @@ function renderErrors(){
       '<aside class="card review-guide"><h3>'+icon('lightbulb',16)+'错题复盘法</h3><p>错题不是抄下来就完了，要「重做 → 说清 → 再测」。</p>'+
         '<div class="review-step"><span class="n">1</span><div><b>先重做，不看答案。</b>用混合模式做一遍，暴露真实问题。</div></div>'+
         '<div class="review-step"><span class="n">2</span><div><b>说清错因。</b>是词义混淆、拼写错误，还是根本没记住？</div></div>'+
-        '<div class="review-step"><span class="n">3</span><div><b>连续答对 2 次。</b>系统会自动把它移入「已掌握」。</div></div>'+
+        '<div class="review-step"><span class="n">3</span><div><b>进度达到 5 点。</b>系统会自动把它移入「已掌握」。</div></div>'+
         '<div class="review-step"><span class="n">4</span><div><b>定期回测。</b>已掌握区每周抽测一次，答错会自动回到待攻克。</div></div>'+
         '<div class="schedule"><div><b>当天</b><span>首次重做</span></div><div><b>次日</b><span>二次巩固</span></div><div><b>第 3 天</b><span>快速抽测</span></div><div><b>第 7 天</b><span>周末回看</span></div></div>'+
         '<div style="margin-top:12px"><button class="btn btn-soft btn-sm btn-block" data-action="go" data-page="guide">'+icon('guide',14)+'查看完整复盘说明</button></div>'+
@@ -3284,11 +3309,11 @@ function renderErrors(){
 function markErrorMastered(wordId){
   const e = errorEntryOf(wordId);
   if(!e) return;
-  e.mastered = !e.mastered;
-  if(e.mastered){ e.masteredAt = Date.now(); e.correctStreak = 2; }
-  else { e.masteredAt = null; e.correctStreak = 0; }
-  saveState(); render();
-  toast(e.mastered?'已移入「已掌握」':'已重新加入「待攻克」','success');
+  const before=JSON.stringify(state), mastered=!e.mastered;
+  setMastery(e, mastered?5:0);
+  saveState();
+  if(!storageOK){ state=JSON.parse(before); render(); return; }
+  render(); toast(mastered?'已移入「已掌握」':'已重新加入「待攻克」','success');
 }
 function removeError(wordId){
   const e = errorEntryOf(wordId);
@@ -3317,7 +3342,7 @@ function renderGuide(){
       '<div class="flow-step"><b><i>2</i>设目标</b><span>每天 20–30 词</span></div>'+
       '<div class="flow-step"><b><i>3</i>选模式</b><span>英→汉 / 汉→英</span></div>'+
       '<div class="flow-step"><b><i>4</i>刷一组</b><span>10 题即时反馈</span></div>'+
-      '<div class="flow-step"><b><i>5</i>复盘</b><span>错题连续答对 2 次</span></div>'+
+      '<div class="flow-step"><b><i>5</i>复盘</b><span>错题进度达到 5 点</span></div>'+
     '</div></section>'+
     '<div class="guide-grid">'+
       '<div class="stack" style="gap:17px">'+
@@ -3337,10 +3362,10 @@ function renderGuide(){
         '</div><div class="callout">'+icon('lightbulb',15)+'<div>备考建议：早读用「英→汉」快速过 20 词，晚上用「汉→英」默写其中 10 个薄弱词。输入比识别更接近考场输出。</div></div></section>'+
         '<section class="card guide-card"><h3>'+icon('refresh',17)+'错题复盘：形成闭环</h3><div class="lead">答错会自动进入错题本，无需手动整理。关键是按节奏重做。</div><div class="step-list">'+
           '<div class="step-row"><span class="step-num">1</span><div class="step-text"><b>当天重做。</b>练完后立刻打开错题本，点「开始错题重练」，用混合模式做一遍。</div></div>'+
-          '<div class="step-row"><span class="step-num">2</span><div class="step-text"><b>连续答对 2 次。</b>同一个错题累计连续答对 2 次，自动移入「已掌握」；中途答错会重新计数。</div></div>'+
+          '<div class="step-row"><span class="step-num">2</span><div class="step-text"><b>进度达到 5 点。</b>答对加 1 点，答错减 1 点；达到 5 点自动移入「已掌握」。</div></div>'+
           '<div class="step-row"><span class="step-num">3</span><div class="step-text"><b>次日与第 3 天回测。</b>在错题本筛选「已掌握」，点单个词的「练一下」抽测；答错会自动回到待攻克。</div></div>'+
           '<div class="step-row"><span class="step-num">4</span><div class="step-text"><b>每周日清账。</b>清空已经稳固的已掌握记录，保留仍有风险的词，避免错题本越积越多。</div></div>'+
-        '</div><table class="schedule-table"><tr><td>当天</td><td>重做一次，重点看例句和词性</td></tr><tr><td>次日</td><td>混合模式再测，连续答对 2 次</td></tr><tr><td>第 3 天</td><td>已掌握区抽测，检查是否反弹</td></tr><tr><td>第 7 天</td><td>周末集中回看，仍错的词单独抄写</td></tr></table></section>'+
+        '</div><table class="schedule-table"><tr><td>当天</td><td>重做一次，重点看例句和词性</td></tr><tr><td>次日</td><td>混合模式再测，争取达到 5 点</td></tr><tr><td>第 3 天</td><td>已掌握区抽测，检查是否反弹</td></tr><tr><td>第 7 天</td><td>周末集中回看，仍错的词单独抄写</td></tr></table></section>'+
         '<section class="card guide-card"><h3>'+icon('upload',17)+'Word 导入格式</h3><div class="lead">支持 .docx 表格和普通段落。英文在前、中文在后，一行一个词最稳妥。导入后严格按文档中的先后顺序保存，不会自动按字母排序。</div>'+
           '<div class="format-pre"><span class="cmt"># 段落格式（空格或 Tab 分隔）</span>\nabandon    <span class="hl">放弃；抛弃</span>\nbenefit    <span class="hl">益处；受益</span>\nlook forward to    <span class="hl">期待；盼望</span>\n\n<span class="cmt"># 表格格式（3 列）</span>\n英文 | 中文释义 | 音标\nabandon | 放弃；抛弃 | /əˈbændən/</div>'+
           '<div class="guide-list" style="margin-top:12px">'+
@@ -3358,21 +3383,21 @@ function renderGuide(){
           '<div class="guide-li"><span class="bullet"></span><div><b>手动星标：</b>词库列表或答题反馈里点星形按钮，随时标记或取消。</div></div>'+
           '<div class="guide-li"><span class="bullet"></span><div><b>自动标记：</b>同一个词累计答错 2 次，自动加入薄弱词，并在标签中提示。</div></div>'+
           '<div class="guide-li"><span class="bullet"></span><div><b>薄弱范围：</b>刷题时选「薄弱」，只练被标记的词。</div></div>'+
-          '<div class="guide-li"><span class="bullet"></span><div><b>状态规则：</b>答对 3 次且正确率 ≥70%，且没有待攻克错题，显示「已掌握」；否则为学习中或待巩固。</div></div>'+
-          '<div class="guide-li"><span class="bullet"></span><div><b>掌握度圆点：</b>每个圆点代表累计答对 1 次，最多显示 5 个。</div></div>'+
+          '<div class="guide-li"><span class="bullet"></span><div><b>状态规则：</b>同一个英文词共享掌握进度，达到 5 点显示「已掌握」，答错会减少 1 点。</div></div>'+
+          '<div class="guide-li"><span class="bullet"></span><div><b>掌握度圆点：</b>答对加 1 点、答错减 1 点，进度范围为 0–5 点，不要求连续答对。</div></div>'+
         '</div></section>'+
         '<section class="card guide-card"><h3>'+icon('keyboard',17)+'键盘快捷键</h3><table class="schedule-table"><tr><td>1–4</td><td>英→汉模式下选择第 1–4 个选项</td></tr><tr><td>Enter</td><td>汉→英检查答案 / 进入下一题</td></tr><tr><td>H</td><td>汉→英显示首字母提示</td></tr><tr><td>Esc</td><td>退出当前练习（会二次确认）</td></tr></table><p class="hint" style="margin-top:9px">手机端直接点击选项、输入框和按钮即可，不需要键盘。</p></section>'+
         '<section class="card guide-card"><h3>'+icon('database',17)+'数据与备份</h3><div class="guide-list">'+
           '<div class="guide-li"><span class="bullet"></span><div><b>本机多账号：</b>支持多个账号登录，每个账号的词库、学习记录、错题本和设置互相独立。账号只保存在当前浏览器，不上传服务器。</div></div>'+
           '<div class="guide-li"><span class="bullet"></span><div>换文件位置、从聊天窗口或压缩包临时预览、使用无痕模式、清理浏览器数据或更换设备，都会导致读不到账号和记录。</div></div>'+
           '<div class="guide-li"><span class="bullet"></span><div>建议每周在「设置与备份」里<b>导出 JSON 备份</b>；换设备时用「恢复备份」导入到当前账号。</div></div>'+
-          '<div class="guide-li"><span class="bullet"></span><div>清空数据只影响<b>当前登录账号</b>；删除单词会同时删除它的学习统计和错题记录。</div></div>'+
+          '<div class="guide-li"><span class="bullet"></span><div>清空数据只影响<b>当前登录账号</b>；删除词库中的单词会删除该词条的统计，独立错题记录和共享掌握进度会保留。</div></div>'+
         '</div><div class="callout">'+icon('alert',15)+'<div>公开电脑上使用后，记得退出账号；账号密码只保存在本机，忘记密码无法找回该账号数据。</div></div></section>'+
         '<section class="card guide-card"><h3>'+icon('info',17)+'常见问题</h3>'+
           '<details class="faq"><summary>多个账号怎么切换？</summary><p>点右上角账号头像或左侧账号栏，进入「设置与备份」后点「退出登录」，再在登录页选择另一个账号并输入密码。每个账号的数据完全独立。</p></details>'+
           '<details class="faq"><summary>Word 导入后没有识别到词怎么办？</summary><p>先确认文件是 .docx 且文字可选择（不是扫描图片）；确保每行都有英文和中文；也可以点「粘贴词表文本」直接粘贴内容，再逐条修改预览。</p></details>'+
           '<details class="faq"><summary>答错的词为什么没有出现在错题本？</summary><p>只有「答错」或点「不会，查看答案」才会记入。英→汉选错、汉→英拼错都会自动记录。可以刷新错题本页面查看最新状态。</p></details>'+
-          '<details class="faq"><summary>为什么已掌握的词又回到待攻克？</summary><p>复习时再次答错，会自动重置掌握进度并回到待攻克。这是正常的遗忘提醒，优先把它重新练熟。</p></details>'+
+          '<details class="faq"><summary>为什么已掌握的词又回到待攻克？</summary><p>复习时再次答错，掌握进度会减少 1 点并回到待攻克；再次答对可增加 1 点。</p></details>'+
           '<details class="faq"><summary>每日目标怎么改？</summary><p>点左下角「设置与备份」，调整每日目标（5–200 词）后保存。首页进度环和侧边栏会同步更新。</p></details>'+
           '<details class="faq"><summary>可以在手机 / 平板上用吗？</summary><p>可以。把 HTML 文件传到手机，用 Chrome、Edge 或 Safari 打开即可，界面会自动适配。数据保存在该设备的浏览器里，不会自动同步。</p></details>'+
         '</section>'+
@@ -3381,7 +3406,7 @@ function renderGuide(){
           '<div class="guide-li"><span class="bullet"></span><div><b>先认后写。</b>先用英→汉建立印象，再用汉→英逼自己输出。</div></div>'+
           '<div class="guide-li"><span class="bullet"></span><div><b>错题优先。</b>每天先清错题，再学新词，避免问题堆积。</div></div>'+
           '<div class="guide-li"><span class="bullet"></span><div><b>读例句。</b>把词放回句子里记，比孤立背释义更牢。</div></div>'+
-          '<div class="guide-li"><span class="bullet"></span><div><b>接受遗忘。</b>忘了就重练，连续答对 2 次再放过自己。</div></div>'+
+          '<div class="guide-li"><span class="bullet"></span><div><b>接受遗忘。</b>忘了就重练，进度达到 5 点再放过自己。</div></div>'+
         '</div></section>'+
       '</div>'+
     '</div>';
@@ -3397,7 +3422,7 @@ function openWelcome(){
       '<div class="welcome-step"><b><i>1</i>建词库</b><span>用内置示例词库，或导入自己的 Word 词表。</span></div>'+
       '<div class="welcome-step"><b><i>2</i>刷一组</b><span>英译汉 / 汉译英 / 混合，10 题一组即时反馈。</span></div>'+
       '<div class="welcome-step"><b><i>3</i>标薄弱</b><span>点星标记，答错 2 次也会自动标为薄弱词。</span></div>'+
-      '<div class="welcome-step"><b><i>4</i>清错题</b><span>答错自动留存，连续答对 2 次移入已掌握。</span></div>'+
+      '<div class="welcome-step"><b><i>4</i>清错题</b><span>答错自动留存，进度达到 5 点移入已掌握。</span></div>'+
     '</div><div class="welcome-note">数据只保存在当前浏览器。建议每周导出一次备份；完整流程、导入格式和复盘方法都在「使用说明」里。</div></div>'+
     '<div class="modal-foot"><button class="btn btn-ghost" data-welcome-guide>查看完整说明</button><button class="btn btn-primary" data-welcome-close>开始使用 '+icon('arrowRight',15)+'</button></div>';
   dlg.showModal();
