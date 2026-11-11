@@ -663,7 +663,8 @@ dialog[open]{display:block;animation:popIn .18s ease-out}
 .error-viewport{overflow:hidden;touch-action:pan-y}
 .error-track{display:flex;transition:transform .3s cubic-bezier(.4,0,.2,1);will-change:transform}
 .error-slide{flex:0 0 100%;min-width:100%}
-.error-slide .error-row{padding:6px 2px 10px;border-bottom:0}
+.error-slide .error-row{padding:14px 2px;border-bottom:1px solid #f0ebdf}
+.error-slide .error-row:last-child{border-bottom:0}
 .error-nav{display:flex;align-items:center;justify-content:center;gap:14px;padding:2px 0 4px}
 .error-counter{font-size:12px;color:var(--ink-3);font-variant-numeric:tabular-nums}
 .error-counter b{color:var(--ink);font-size:13px}
@@ -3127,10 +3128,12 @@ function applyErrorSlide(){
   if(prev) prev.disabled = ui.errorIndex<=0;
   if(next) next.disabled = ui.errorIndex>=count-1;
 }
+const ERROR_PAGE_SIZE = 10;
 function moveErrorSlide(delta){
   const list = errorListData().list;
   if(!list.length) return;
-  const next = Math.min(list.length-1, Math.max(0, (ui.errorIndex||0)+delta));
+  const pages = Math.ceil(list.length / ERROR_PAGE_SIZE);
+  const next = Math.min(pages-1, Math.max(0, (ui.errorIndex||0)+delta));
   if(next===(ui.errorIndex||0)) return;
   ui.errorIndex = next;
   applyErrorSlide();
@@ -3141,22 +3144,23 @@ function renderErrors(){
   const data = errorListData();
   const list = data.list;
   const q = data.q;
-  ui.errorIndex = list.length ? Math.min(Math.max(0, ui.errorIndex|0), list.length-1) : 0;
+  const pages = Math.ceil(list.length / ERROR_PAGE_SIZE);
+  ui.errorIndex = pages ? Math.min(Math.max(0, ui.errorIndex|0), pages-1) : 0;
   const totalWrong = state.errorBook.reduce(function(n,e){return n+(e.wrongCount||0);},0);
   const filters = [['open','待攻克',open.length],['mastered','已掌握',mastered.length],['all','全部',state.errorBook.length]].map(function(f){
     return '<button class="chip '+(ui.errorFilter===f[0]?'active':'')+'" data-action="error-filter" data-filter="'+f[0]+'">'+f[1]+' <span class="num">'+f[2]+'</span></button>';
   }).join('');
   const rows = list.length ?
-    '<div class="error-carousel" id="error-window" data-count="'+list.length+'">'+
+    '<div class="error-carousel" id="error-window" data-count="'+pages+'">'+
       '<div class="error-viewport"><div class="error-track" style="transform:translateX(-'+(ui.errorIndex*100)+'%)">'+
-        list.map(function(e){ return '<div class="error-slide">'+errorRowHtml(e)+'</div>'; }).join('')+
+        Array.from({length:pages}, function(_, i){ return '<div class="error-slide">'+list.slice(i*ERROR_PAGE_SIZE,(i+1)*ERROR_PAGE_SIZE).map(errorRowHtml).join('')+'</div>'; }).join('')+
       '</div></div>'+
       '<div class="error-nav">'+
-        '<button class="icon-btn sm" data-action="error-prev" aria-label="上一个错题" title="上一个"'+(ui.errorIndex<=0?' disabled':'')+'>'+icon('chevronLeft',15)+'</button>'+
-        '<span class="error-counter"><b>'+(ui.errorIndex+1)+'</b> / '+list.length+'</span>'+
-        '<button class="icon-btn sm" data-action="error-next" aria-label="下一个错题" title="下一个"'+(ui.errorIndex>=list.length-1?' disabled':'')+'>'+icon('chevronRight',15)+'</button>'+
+        '<button class="icon-btn sm" data-action="error-prev" aria-label="上一页错题" title="上一页"'+(ui.errorIndex<=0?' disabled':'')+'>'+icon('chevronLeft',15)+'</button>'+
+        '<span class="error-counter"><b>'+(ui.errorIndex+1)+'</b> / '+pages+'</span>'+
+        '<button class="icon-btn sm" data-action="error-next" aria-label="下一页错题" title="下一页"'+(ui.errorIndex>=pages-1?' disabled':'')+'>'+icon('chevronRight',15)+'</button>'+
       '</div>'+
-      '<div class="error-hint">左右滑动切换错题 · 共 '+list.length+' 条</div>'+
+      '<div class="error-hint">左右滑动切换页面 · 每页最多 10 条，共 '+list.length+' 条</div>'+
     '</div>' :
     '<div class="empty"><div class="empty-icon">'+icon('errors',26)+'</div><h3>'+(q?'没有匹配的错题':ui.errorFilter==='mastered'?'还没有已掌握的错题':'还没有待攻克的错题')+'</h3><p>'+(q?'试试别的关键词，或切换筛选条件。':'刷题时答错的词会自动出现在这里。连续答对 2 次后移入「已掌握」。')+'</p><button class="btn btn-primary btn-sm" '+(open.length?'data-action="start-errors"':'data-action="go" data-page="quiz"')+'>'+icon(open.length?'refresh':'play',14)+(open.length?'开始错题重练':'去刷一组题')+'</button></div>';
   return '<div class="page-actions"><div class="left"><div class="page-intro">错题自动留存，不用手动抄。优先清「待攻克」，连续答对 2 次即可移入已掌握。</div></div><div class="right">'+(mastered.length?'<button class="btn btn-ghost" data-action="clear-mastered">'+icon('trash',15)+'清空已掌握</button>':'')+(open.length?'<button class="btn btn-primary" data-action="start-errors">'+icon('refresh',15)+'开始错题重练</button>':'')+'</div></div>'+
