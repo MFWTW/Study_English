@@ -1658,6 +1658,19 @@ function openErrorCount(){
 function weakCount(){
   return Object.keys(state.stats).filter(function(k){return state.stats[k] && state.stats[k].weak;}).length;
 }
+function errorBookWeakCount(){
+  const weakKeys = new Set();
+  state.libraries.forEach(function(lib){
+    lib.words.forEach(function(word){
+      if(state.stats[word.id] && state.stats[word.id].weak) weakKeys.add(errorKey(word.en));
+    });
+  });
+  return state.errorBook.filter(function(entry){
+    const stat = state.stats[entry.wordId];
+    const key = errorKey(entry.en);
+    return (stat && stat.weak) || (key && weakKeys.has(key));
+  }).length;
+}
 function libStats(lib){
   const words = lib.words;
   let learned=0, mastered=0, weak=0;
@@ -1973,8 +1986,8 @@ function renderHome(){
   '<div class="stats-row">'+
     statCard('book','green',ls.total,'当前词库词汇','含 '+state.libraries.length+' 个自定义 / 内置词库')+
     statCard('layers','blue',ls.learned,'已开始学习','掌握度按累计答对次数计算')+
-    statCard('star','amber',ls.weak,'薄弱生词','自动标记 + 手动星标')+
-    statCard('errors','red',ls.errors,'待攻克错题','连续答对 2 次自动移出')+
+    statCard('star','amber',errorBookWeakCount(),'薄弱生词','错题本中自动标记或手动星标的词')+
+    statCard('errors','red',openErrorCount(),'待攻克错题','整个错题本 · 连续答对 2 次移入已掌握')+
   '</div>'+
   '<div class="home-bottom">'+
     '<section class="card card-pad"><div class="card-head"><div class="card-title">'+icon('clock',17)+'最近练习</div><button class="btn btn-ghost btn-sm" data-action="go" data-page="quiz">'+icon('practice',14)+'去刷题</button></div><div class="session-list">'+sessionsHtml+'</div></section>'+
