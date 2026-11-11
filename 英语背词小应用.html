@@ -1706,13 +1706,11 @@ function masteryDots(word){
   return html+'</div>';
 }
 function poolFor(scope, libId){
+  if(scope==='errors') return state.errorBook.filter(function(e){return !e.mastered;}).map(errorWord);
   const lib = getLib(libId);
   const words = lib ? lib.words.slice() : [];
   if(scope==='new') return words.filter(function(w){ const s=state.stats[w.id]; return !s || (s.right+s.wrong)===0; });
   if(scope==='weak') return words.filter(function(w){ const s=state.stats[w.id]; return s && s.weak; });
-  if(scope==='errors'){
-    return words.filter(function(w){const e=errorEntryOf(w.id); return e && !e.mastered;});
-  }
   return words;
 }
 function modeLabel(mode){
@@ -1978,7 +1976,7 @@ function renderHome(){
         '<button class="chip '+(scope==='all'?'active':'')+'" data-action="setup-scope" data-scope="all">全部</button>'+
         '<button class="chip '+(scope==='new'?'active':'')+'" data-action="setup-scope" data-scope="new">未学</button>'+
         '<button class="chip '+(scope==='weak'?'active':'')+'" data-action="setup-scope" data-scope="weak">薄弱 '+ls.weak+'</button>'+
-        '<button class="chip '+(scope==='errors'?'active':'')+'" data-action="setup-scope" data-scope="errors">错题 '+ls.errors+'</button>'+
+        '<button class="chip '+(scope==='errors'?'active':'')+'" data-action="setup-scope" data-scope="errors" title="来自整个错题本，不受所选词库限制">错题 '+openErrorCount()+'</button>'+
       '</div></div>'+
       '<div class="quick-field"><label>词库</label><select class="select quick-select" id="homeLib">'+libOptions+'</select></div>'+
       '<div class="quick-foot"><select class="select" id="homeCount">'+countOptions(count)+'</select><button class="btn btn-primary" data-action="start-quick">'+icon('play',14)+'开始</button></div>'+
@@ -2743,10 +2741,11 @@ function confirmImport(){
    ============================================================ */
 function quizRoundFor(libId, scope){
   if(!Array.isArray(state.quizRounds)) state.quizRounds = [];
-  return state.quizRounds.find(function(r){return r.libId===libId && r.scope===scope;}) || null;
+  const key = scope==='errors' ? '__error_book__' : libId;
+  return state.quizRounds.find(function(r){return r.libId===key && r.scope===scope;}) || null;
 }
 function startQuick(){
-  const libId = state.activeLibraryId, scope = ui.setup.scope, mode = ui.setup.mode;
+  const scope = ui.setup.scope, mode = ui.setup.mode, libId = scope==='errors' ? '__error_book__' : state.activeLibraryId;
   let round = quizRoundFor(libId, scope, mode);
   if(round && !roundRemaining(round).length){
     state.quizRounds = state.quizRounds.filter(function(r){return r!==round;});
@@ -2765,7 +2764,7 @@ function quizStartLabel(){
   return round && round.completed.length && roundRemaining(round).length ? '继续刷题' : '开始刷题';
 }
 function roundRemaining(round){
-  if(!round || !state.libraries.some(function(lib){ return lib.id===round.libId; })) return [];
+  if(!round || (round.scope!=='errors' && !state.libraries.some(function(lib){ return lib.id===round.libId; }))) return [];
   const done = new Set(round.completed);
   return poolFor(round.scope, round.libId).filter(function(w){ return !done.has(w.id); });
 }
@@ -2817,10 +2816,11 @@ function startQuiz(opts){
   const count = Math.max(1, Math.min(Number(opts.count)||10, words.length));
   words = words.slice(0,count);
   const mode = opts.mode || 'en2cn';
+  const errorOptions = opts.scope==='errors' ? {words:(state.errorBook||[]).map(errorWord).concat(state.libraries.flatMap(function(item){return item.words;}))} : null;
   const questions = words.map(function(w,i){
     let m = mode;
     if(mode==='mixed') m = i%2===0 ? 'en2cn' : 'cn2en';
-    return buildQuestion(w,m,getLib(w.libraryId)||lib);
+    return buildQuestion(w,m,errorOptions || getLib(w.libraryId)||lib);
   });
   ui.quiz = {
     questions:questions, idx:0, answers:[], finished:false, summary:null,
@@ -2859,7 +2859,7 @@ function renderQuizSetup(){
             '<button class="chip '+(ui.setup.scope==='all'?'active':'')+'" data-action="setup-scope" data-scope="all">全部 '+counts.all+'</button>'+
             '<button class="chip '+(ui.setup.scope==='new'?'active':'')+'" data-action="setup-scope" data-scope="new">未学 '+counts.new+'</button>'+
             '<button class="chip '+(ui.setup.scope==='weak'?'active':'')+'" data-action="setup-scope" data-scope="weak">薄弱 '+counts.weak+'</button>'+
-            '<button class="chip '+(ui.setup.scope==='errors'?'active':'')+'" data-action="setup-scope" data-scope="errors">错题 '+counts.errors+'</button>'+
+            '<button class="chip '+(ui.setup.scope==='errors'?'active':'')+'" data-action="setup-scope" data-scope="errors" title="来自整个错题本，不受所选词库限制">错题 '+counts.errors+'</button>'+
           '</div></div>'+
           '<div class="field"><label>本组题量</label><div class="row wrap" style="gap:7px">'+
             [10,20,30,50].map(function(n){ return '<button class="chip '+(Number(ui.setup.count)===n?'active':'')+'" data-action="setup-count" data-count="'+n+'">'+n+' 题</button>'; }).join('')+
