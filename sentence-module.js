@@ -55,17 +55,16 @@
       lib.words.unshift(word);
     }
     var error = state.errorBook.find(function (e) { return e && e.wordId === word.id; });
-    if (error && !error.mastered) { toast('该表达已在词研错题本中'); return; }
-    var oldError = error ? {mastered:error.mastered, correctStreak:error.correctStreak, lastWrongAt:error.lastWrongAt} : null;
-    if (error) { error.mastered = false; error.correctStreak = 0; error.lastWrongAt = Date.now(); }
-    else { var now = Date.now(); error = {id:makeId(), wordId:word.id, libraryId:lib.id, en:word.en, cn:word.cn, phonetic:word.phonetic || '', wrongCount:0, correctStreak:0, mastered:false, createdAt:now, lastWrongAt:now}; state.errorBook.push(error); }
+    var oldError = error ? {mastered:error.mastered, correctStreak:error.correctStreak, lastWrongAt:error.lastWrongAt, wrongCount:error.wrongCount || 0} : null;
+    if (error) { error.wrongCount = (error.wrongCount || 0) + 1; error.mastered = false; error.correctStreak = 0; error.lastWrongAt = Date.now(); }
+    else { var now = Date.now(); error = {id:makeId(), wordId:word.id, libraryId:lib.id, en:word.en, cn:word.cn, phonetic:word.phonetic || '', wrongCount:1, correctStreak:0, mastered:false, createdAt:now, lastWrongAt:now}; state.errorBook.push(error); }
     saveState();
     if (typeof storageOK !== 'undefined' && !storageOK) {
       if (createdWord) lib.words.splice(lib.words.indexOf(word), 1);
       if (oldError) Object.assign(error, oldError); else state.errorBook.splice(state.errorBook.indexOf(error), 1);
       toast('保存失败，请检查浏览器存储后重试', 'error'); return;
     }
-    refresh(); toast('已收藏到词研错题本');
+    refresh(); toast(oldError ? '已再次标记，错词权重 +1（累计 ' + error.wrongCount + ' 次）' : '已收藏到词研错题本');
   }
   function tomorrow() {
     var d = new Date();

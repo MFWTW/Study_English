@@ -193,10 +193,11 @@
     let word = lib.words.find(function (w) { return w.en.toLowerCase() === selectedWord.toLowerCase(); });
     if (!word) { word = {id:newId('w'), en:selectedWord, cn:cn, phonetic:'', example:'', exampleCn:'', libraryId:lib.id}; lib.words.push(word); }
     let entry = state.errorBook.find(function (e) { return e.wordId === word.id; });
-    if (!entry) { const now = Date.now(); entry = {id:newId('e'), wordId:word.id, libraryId:lib.id, en:word.en, cn:word.cn, phonetic:word.phonetic || '', wrongCount:0, correctStreak:0, mastered:false, createdAt:now, lastWrongAt:now}; state.errorBook.push(entry); }
-    else { entry.mastered = false; entry.correctStreak = 0; entry.lastWrongAt = Date.now(); }
+    const repeated = !!entry;
+    if (!entry) { const now = Date.now(); entry = {id:newId('e'), wordId:word.id, libraryId:lib.id, en:word.en, cn:word.cn, phonetic:word.phonetic || '', wrongCount:1, correctStreak:0, mastered:false, createdAt:now, lastWrongAt:now}; state.errorBook.push(entry); }
+    else { entry.wrongCount = (entry.wrongCount || 0) + 1; entry.mastered = false; entry.correctStreak = 0; entry.lastWrongAt = Date.now(); }
     word.cn = cn; entry.cn = cn;
-    saveState(); toast('已保存到词库和错题本'); refreshWordPanel();
+    saveState(); toast(repeated ? '已在错题本，错词权重 +1（累计 ' + entry.wrongCount + ' 次）' : '已保存到词库和错题本'); refreshWordPanel();
   }
   function saveExpression(index) {
     const item = sentenceExpressions[Number(index)];
@@ -217,10 +218,9 @@
       lib.words.push(word); created = true;
     }
     let entry = state.errorBook.find(function (e) { return e && e.wordId === word.id; });
-    if (entry && !entry.mastered) { toast('该搭配已在词研错题本中'); return; }
-    const oldEntry = entry ? {mastered:entry.mastered, correctStreak:entry.correctStreak, lastWrongAt:entry.lastWrongAt} : null;
-    if (entry) { entry.mastered = false; entry.correctStreak = 0; entry.lastWrongAt = Date.now(); entry.cn = meaning; }
-    else { const now = Date.now(); entry = {id:newId('e'), wordId:word.id, libraryId:lib.id, en:word.en, cn:meaning, phonetic:'', wrongCount:0, correctStreak:0, mastered:false, createdAt:now, lastWrongAt:now}; state.errorBook.push(entry); }
+    const oldEntry = entry ? {mastered:entry.mastered, correctStreak:entry.correctStreak, lastWrongAt:entry.lastWrongAt, wrongCount:entry.wrongCount || 0} : null;
+    if (entry) { entry.wrongCount = (entry.wrongCount || 0) + 1; entry.mastered = false; entry.correctStreak = 0; entry.lastWrongAt = Date.now(); entry.cn = meaning; }
+    else { const now = Date.now(); entry = {id:newId('e'), wordId:word.id, libraryId:lib.id, en:word.en, cn:meaning, phonetic:'', wrongCount:1, correctStreak:0, mastered:false, createdAt:now, lastWrongAt:now}; state.errorBook.push(entry); }
     if (!word.cn) word.cn = meaning;
     saveState();
     if (typeof storageOK !== 'undefined' && !storageOK) {
@@ -228,7 +228,7 @@
       if (oldEntry) Object.assign(entry, oldEntry); else state.errorBook.splice(state.errorBook.indexOf(entry), 1);
       toast('保存失败，请检查浏览器存储后重试', 'error'); return;
     }
-    refreshSentencePanel(); toast('已收藏到词研错题本');
+    refreshSentencePanel(); toast(oldEntry ? '已再次标记，错词权重 +1（累计 ' + entry.wrongCount + ' 次）' : '已收藏到词研错题本');
   }
   function saveSentence() {
     if (!selectedSentence) { toast('请先选择句子', 'error'); return; }
