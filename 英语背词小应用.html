@@ -1499,6 +1499,7 @@ function normalizeState(s){
   if(!s.libraries.some(function(l){return l.id===s.activeLibraryId;})) s.activeLibraryId = s.libraries[0].id;
   s.stats = s.stats && typeof s.stats==='object' ? s.stats : {};
   s.errorBook = normalizeErrorBook(s);
+  s.quizRounds = Array.isArray(s.quizRounds) ? s.quizRounds.filter(function(r){return r && typeof r.libId==='string' && typeof r.scope==='string' && typeof r.mode==='string' && Array.isArray(r.completed);}).map(function(r){return {libId:r.libId,scope:r.scope,mode:r.mode,completed:Array.from(new Set(r.completed.filter(function(id){return typeof id==='string';})))};}) : [];
   s.sessions = Array.isArray(s.sessions) ? s.sessions : [];
   s.studyDays = Array.isArray(s.studyDays) ? s.studyDays : [];
   s.daily = s.daily && typeof s.daily==='object' ? s.daily : {date:todayKey(),count:0,correct:0};
@@ -1961,7 +1962,7 @@ function renderHome(){
           '<div class="hero-meta"><span>今日进度 <b>'+todayN+' / '+goal+'</b></span><span>'+(done?'已达标':'还差 '+Math.max(0,goal-todayN)+' 个词')+'</span></div>'+
         '</div>'+
         '<div class="hero-actions">'+
-          '<button class="btn btn-cream btn-lg" data-action="start-quick">'+icon('play',16)+'开始刷题</button>'+
+          '<button class="btn btn-cream btn-lg" data-action="start-quick">'+icon('play',16)+quizStartLabel()+'</button>'+
           '<button class="btn btn-ghost btn-lg" data-action="go" data-page="errors">'+icon('errors',16)+'错题复盘</button>'+
         '</div>'+
       '</div>'+
@@ -2740,9 +2741,28 @@ function confirmImport(){
 /* ============================================================
    QUIZ
    ============================================================ */
+function quizRoundFor(libId, scope){
+  if(!Array.isArray(state.quizRounds)) state.quizRounds = [];
+  return state.quizRounds.find(function(r){return r.libId===libId && r.scope===scope;}) || null;
+}
 function startQuick(){
-  const round = {mode:ui.setup.mode, scope:ui.setup.scope, count:ui.setup.count, libId:state.activeLibraryId, completed:[]};
-  startQuiz({mode:round.mode, scope:round.scope, count:round.count, libId:round.libId, round:round});
+  const libId = state.activeLibraryId, scope = ui.setup.scope, mode = ui.setup.mode;
+  let round = quizRoundFor(libId, scope, mode);
+  if(round && !roundRemaining(round).length){
+    state.quizRounds = state.quizRounds.filter(function(r){return r!==round;});
+    round = null;
+  }
+  if(!round){
+    round = {mode:mode, scope:scope, libId:libId, completed:[]};
+    state.quizRounds.push(round);
+  }
+  round.count = ui.setup.count;
+  round.mode = mode;
+  startQuiz({words:roundRemaining(round), mode:mode, scope:scope, count:round.count, libId:libId, round:round});
+}
+function quizStartLabel(){
+  const round = quizRoundFor(state.activeLibraryId, ui.setup.scope, ui.setup.mode);
+  return round && round.completed.length && roundRemaining(round).length ? '继续刷题' : '开始刷题';
 }
 function roundRemaining(round){
   if(!round || !state.libraries.some(function(lib){ return lib.id===round.libId; })) return [];
@@ -2760,6 +2780,10 @@ function restartQuizRound(){
   const round = ui.quiz && ui.quiz.round;
   if(!round) return;
   const fresh = {mode:round.mode, scope:round.scope, count:round.count, libId:round.libId, completed:[]};
+  if(!Array.isArray(state.quizRounds)) state.quizRounds = [];
+  state.quizRounds = state.quizRounds.filter(function(r){return !(r.libId===fresh.libId && r.scope===fresh.scope);});
+  state.quizRounds.push(fresh);
+  saveState();
   startQuiz({mode:fresh.mode, scope:fresh.scope, count:fresh.count, libId:fresh.libId, round:fresh});
 }
 function buildQuestion(word, mode, lib){
@@ -2847,7 +2871,7 @@ function renderQuizSetup(){
           '</div><div class="tiny muted" style="margin-top:6px">'+(state.settings.shuffle?'每轮会随机抽取并打乱题目顺序。':'按词库中保存的顺序出题；导入词表时也按 Word 文档原顺序保存。')+'</div></div>'+
         '</div>'+
         '<div class="divider"></div>'+
-        '<div class="row wrap" style="justify-content:space-between"><div class="hint">'+icon('lightbulb',13)+' 建议先做 10 题热身，再针对错题做 5 题复盘。</div><button class="btn btn-primary btn-lg" data-action="start-quick">'+icon('play',16)+'开始练习</button></div>'+
+        '<div class="row wrap" style="justify-content:space-between"><div class="hint">'+icon('lightbulb',13)+' 建议先做 10 题热身，再针对错题做 5 题复盘。</div><button class="btn btn-primary btn-lg" data-action="start-quick">'+icon('play',16)+quizStartLabel()+'</button></div>'+
       '</section>'+
       '<div class="card card-pad" style="margin-top:15px;background:#fbf8ef"><div class="card-title" style="margin-bottom:9px">'+icon('guide',16)+'两种模式怎么选？</div><div class="guide-list">'+
         '<div class="guide-li"><span class="bullet"></span><div><b>英 → 汉：</b>练阅读时的「快速识别」。适合第一遍过词、扩大被动词汇量。</div></div>'+
@@ -2996,6 +3020,8 @@ function finalizeAnswer(q, correct, userAnswer){
   const outcome = recordLearning(q.word, !!correct);
   q.newError = outcome.newError; q.autoWeak = outcome.autoWeak;
   q.masteredNow = outcome.masteredNow; q.progress = outcome.correctStreak;
+  const round = ui.quiz.round;
+  if(round && !ui.quiz.roundRetry && !round.completed.includes(q.word.id)) round.completed.push(q.word.id);
   saveState();
   render();
 }
@@ -3071,7 +3097,7 @@ function finishQuiz(){
   quiz.finished = true;
   if(quiz.round && !quiz.roundRetry){
     const completed = new Set(quiz.round.completed);
-    quiz.questions.forEach(function(q){ completed.add(q.word.id); });
+    quiz.answers.forEach(function(answer){ completed.add(answer.wordId); });
     quiz.round.completed = Array.from(completed);
   }
   quiz.summary = summary;
