@@ -129,7 +129,7 @@
         (s.translation ? '<p style="white-space:pre-wrap;overflow-wrap:anywhere">' + esc(s.translation) + '</p>' : '') +
         '<p class="hint">' + esc(status(s)) + '</p>' +
         '<label class="hint">所属集合 <select class="input" data-sq-move data-id="' + id + '" aria-label="句子所属集合">' + collectionOptions(list, collectionId(s, list)) + '</select></label>' +
-        '<div class="row wrap" style="gap:8px"><button type="button" class="btn btn-soft btn-sm" data-action="sq-analyze" data-id="' + id + '">DeepSeek 解析</button>' +
+        '<div class="row wrap" style="gap:8px"><button type="button" class="btn btn-ghost btn-sm" data-action="speak-text" data-text="' + esc(String(s.text || '')) + '" title="朗读原句" aria-label="朗读原句">朗读</button><button type="button" class="btn btn-soft btn-sm" data-action="sq-analyze" data-id="' + id + '">DeepSeek 解析</button>' +
         (hasAnalysis ? '<button type="button" class="btn btn-ghost btn-sm" data-action="sq-toggle-analysis" data-id="' + id + '" aria-expanded="' + expanded + '">' + (expanded ? '收起解析' : '展开解析') + '</button>' : '') +
         '<button type="button" class="btn btn-ghost btn-sm" data-action="sq-review" data-id="' + id + '">安排明天复习</button>' +
         '<button type="button" class="btn btn-ghost btn-sm" data-action="sq-delete" data-id="' + id + '">删除</button></div>' +
