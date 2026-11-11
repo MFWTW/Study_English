@@ -1446,6 +1446,41 @@ function loadState(){
   state = defaultState();
   saveState();
 }
+function errorKey(en){ return String(en||'').trim().replace(/\s+/g,' ').toLowerCase(); }
+function normalizeErrorBook(s){
+  const result = [], byKey = new Map();
+  const libs = Array.isArray(s.libraries) ? s.libraries : [];
+  (Array.isArray(s.errorBook) ? s.errorBook : []).forEach(function(raw){
+    if(!raw || typeof raw !== 'object') return;
+    let source = null;
+    for(const lib of libs){ source = (lib.words||[]).find(function(w){return w.id===raw.wordId;}); if(source) break; }
+    const en = String(raw.en || (source && source.en) || '').trim();
+    const key = errorKey(en);
+    const previous = key && byKey.get(key);
+    if(previous){
+      previous.wrongCount += Math.max(0, Number(raw.wrongCount)||0);
+      previous.createdAt = Math.min(previous.createdAt || Infinity, Number(raw.createdAt)||Infinity);
+      if(!Number.isFinite(previous.createdAt)) previous.createdAt = 0;
+      previous.lastWrongAt = Math.max(Number(previous.lastWrongAt)||0, Number(raw.lastWrongAt)||0);
+      const meaning = String(raw.cn || (source && source.cn) || '').trim();
+      if(meaning && !previous.cn.split('\n').includes(meaning)) previous.cn += (previous.cn?'\n':'') + meaning;
+      if(!previous.phonetic) previous.phonetic = raw.phonetic || (source && source.phonetic) || '';
+      if(!previous.example) previous.example = raw.example || (source && source.example) || '';
+      if(!previous.exampleCn) previous.exampleCn = raw.exampleCn || (source && source.exampleCn) || '';
+      if(!raw.mastered){ previous.mastered = false; previous.correctStreak = 0; }
+      return;
+    }
+    const id = raw.id || uid('e');
+    const entry = Object.assign({}, raw, {id:id, wordId:'error:'+id, libraryId:null,
+      en:en, cn:String(raw.cn || (source && source.cn) || ''),
+      phonetic:raw.phonetic || (source && source.phonetic) || '',
+      example:raw.example || (source && source.example) || '', exampleCn:raw.exampleCn || (source && source.exampleCn) || '',
+      wrongCount:Math.max(0, Number(raw.wrongCount)||0)});
+    result.push(entry);
+    if(key) byKey.set(key, entry);
+  });
+  return result;
+}
 function normalizeState(s){
   const oldVersion = Number(s.version) || 1;
   s.version = 2;
@@ -1463,7 +1498,7 @@ function normalizeState(s){
   if(!s.libraries.length) s.libraries = buildSeedLibraries();
   if(!s.libraries.some(function(l){return l.id===s.activeLibraryId;})) s.activeLibraryId = s.libraries[0].id;
   s.stats = s.stats && typeof s.stats==='object' ? s.stats : {};
-  s.errorBook = Array.isArray(s.errorBook) ? s.errorBook : [];
+  s.errorBook = normalizeErrorBook(s);
   s.sessions = Array.isArray(s.sessions) ? s.sessions : [];
   s.studyDays = Array.isArray(s.studyDays) ? s.studyDays : [];
   s.daily = s.daily && typeof s.daily==='object' ? s.daily : {date:todayKey(),count:0,correct:0};
@@ -1578,14 +1613,44 @@ function findWord(id){
     const w = lib.words.find(function(x){return x.id===id;});
     if(w) return w;
   }
-  return null;
+  const entry = state.errorBook.find(function(e){return e.wordId===id;});
+  return entry ? errorWord(entry) : null;
+}
+function errorWord(e){
+  return {id:e.wordId, errorId:e.id, en:e.en, cn:e.cn, phonetic:e.phonetic||'', example:e.example||'', exampleCn:e.exampleCn||'', libraryId:null};
+}
+function saveIndependentError(word){
+  const key = errorKey(word && word.en);
+  if(!key || !currentAccount || !Array.isArray(state.errorBook)) return {ok:false};
+  let entry = state.errorBook.find(function(e){return errorKey(e.en)===key;});
+  const repeated = !!entry, before = entry ? Object.assign({},entry) : null, oldSavedAt = state.lastSavedAt;
+  const now = Date.now();
+  if(!entry){
+    const id = uid('e');
+    entry = {id:id, wordId:'error:'+id, libraryId:null, en:String(word.en).trim(), cn:String(word.cn||'').trim(), phonetic:word.phonetic||'', example:word.example||'', exampleCn:word.exampleCn||'', wrongCount:0, correctStreak:0, mastered:false, createdAt:now};
+    state.errorBook.push(entry);
+  }
+  entry.cn = String(word.cn||entry.cn||'').trim();
+  entry.wrongCount = (Number(entry.wrongCount)||0)+1;
+  entry.correctStreak = 0; entry.mastered = false; entry.lastWrongAt = now;
+  saveState();
+  if(!storageOK){
+    if(repeated){ Object.keys(entry).forEach(function(k){delete entry[k];}); Object.assign(entry,before); }
+    else state.errorBook.splice(state.errorBook.indexOf(entry),1);
+    state.lastSavedAt = oldSavedAt;
+    return {ok:false};
+  }
+  return {ok:true, entry:entry, repeated:repeated};
 }
 function scoreOf(wordId){
   if(!state.stats[wordId]) state.stats[wordId] = {right:0,wrong:0,streak:0,weak:false,weakAuto:false,lastSeen:null,lastResult:null};
   return state.stats[wordId];
 }
 function errorEntryOf(wordId){
-  return state.errorBook.find(function(e){return e.wordId===wordId;}) || null;
+  const direct = state.errorBook.find(function(e){return e.wordId===wordId;});
+  if(direct) return direct;
+  const word = findWord(wordId), key = word && errorKey(word.en);
+  return key ? state.errorBook.find(function(e){return errorKey(e.en)===key;}) || null : null;
 }
 function openErrorCount(){
   return state.errorBook.filter(function(e){return !e.mastered;}).length;
@@ -1603,13 +1668,14 @@ function libStats(lib){
     if(statusOf(w).key==='mastered') mastered++;
     if(s.weak) weak++;
   }
-  return {total:words.length, learned:learned, mastered:mastered, weak:weak, errors:state.errorBook.filter(function(e){return !e.mastered && words.some(function(w){return w.id===e.wordId;});}).length};
+  return {total:words.length, learned:learned, mastered:mastered, weak:weak, errors:words.filter(function(w){const e=errorEntryOf(w.id); return e && !e.mastered;}).length};
 }
 function statusOf(word){
   const s = state.stats[word.id];
   const attempts = s ? s.right+s.wrong : 0;
-  const open = state.errorBook.some(function(e){return e.wordId===word.id && !e.mastered;});
-  const masteredEntry = state.errorBook.some(function(e){return e.wordId===word.id && e.mastered;});
+  const entry = errorEntryOf(word.id);
+  const open = entry && !entry.mastered;
+  const masteredEntry = entry && entry.mastered;
   if(!attempts) return {key:'new', label:'未学', cls:'badge-gray'};
   if(open) return {key:'review', label:'待巩固', cls:'badge-red'};
   if(masteredEntry) return {key:'mastered', label:'已掌握', cls:'badge-green'};
@@ -1631,8 +1697,7 @@ function poolFor(scope, libId){
   if(scope==='new') return words.filter(function(w){ const s=state.stats[w.id]; return !s || (s.right+s.wrong)===0; });
   if(scope==='weak') return words.filter(function(w){ const s=state.stats[w.id]; return s && s.weak; });
   if(scope==='errors'){
-    const ids = new Set(state.errorBook.filter(function(e){return !e.mastered;}).map(function(e){return e.wordId;}));
-    return words.filter(function(w){return ids.has(w.id);});
+    return words.filter(function(w){const e=errorEntryOf(w.id); return e && !e.mastered;});
   }
   return words;
 }
@@ -1944,7 +2009,7 @@ function filteredWords(){
   });
   if(ui.wordFilter==='new') words = words.filter(function(w){ return statusOf(w).key==='new'; });
   else if(ui.wordFilter==='weak') words = words.filter(function(w){ const s=state.stats[w.id]; return s && s.weak; });
-  else if(ui.wordFilter==='errors') words = words.filter(function(w){ return state.errorBook.some(function(e){return e.wordId===w.id && !e.mastered;}); });
+  else if(ui.wordFilter==='errors') words = words.filter(function(w){ const e=errorEntryOf(w.id); return e && !e.mastered; });
   else if(ui.wordFilter==='review') words = words.filter(function(w){ return statusOf(w).key==='review'; });
   else if(ui.wordFilter==='mastered') words = words.filter(function(w){ return statusOf(w).key==='mastered'; });
   return words;
@@ -1973,7 +2038,7 @@ function renderLibrary(){
     all:lib.words.length,
     new:lib.words.filter(function(w){return statusOf(w).key==='new';}).length,
     weak:lib.words.filter(function(w){return state.stats[w.id] && state.stats[w.id].weak;}).length,
-    errors:lib.words.filter(function(w){return state.errorBook.some(function(e){return e.wordId===w.id&&!e.mastered;});}).length,
+    errors:lib.words.filter(function(w){const e=errorEntryOf(w.id); return e && !e.mastered;}).length,
     review:lib.words.filter(function(w){return statusOf(w).key==='review';}).length,
     mastered:lib.words.filter(function(w){return statusOf(w).key==='mastered';}).length
   };
@@ -2046,7 +2111,7 @@ function openWordDialog(wordId){
       editing.phonetic = document.getElementById('wPhonetic').value.trim();
       editing.example = document.getElementById('wExample').value.trim();
       editing.exampleCn = document.getElementById('wExampleCn').value.trim();
-      state.errorBook.forEach(function(e){ if(e.wordId===editing.id){ e.en=en; e.cn=cn; e.phonetic=editing.phonetic; } });
+      // 错题本保存独立快照，编辑原词条不覆盖错题。
       toast('已保存修改','success');
     }else{
       lib.words.unshift({id:uid('w'), en:en, cn:cn, phonetic:document.getElementById('wPhonetic').value.trim(), example:document.getElementById('wExample').value.trim(), exampleCn:document.getElementById('wExampleCn').value.trim(), libraryId:lib.id});
@@ -2924,7 +2989,7 @@ function finalizeAnswer(q, correct, userAnswer){
 function recordLearning(word, correct){
   ensureDaily();
   const s = scoreOf(word.id);
-  const hadError = errorEntryOf(word.id);
+  const hadError = errorEntryOf(word.id) || state.errorBook.find(function(e){return errorKey(e.en) && errorKey(e.en)===errorKey(word.en);}) || null;
   const outcome = {newError:false, autoWeak:false, masteredNow:false, correctStreak:0};
   s.lastSeen = Date.now();
   s.lastResult = correct ? 'correct' : 'wrong';
@@ -2952,16 +3017,15 @@ function recordLearning(word, correct){
     }
   }else{
     if(!entry){
-      entry = {id:uid('e'), wordId:word.id, libraryId:word.libraryId||state.activeLibraryId, en:word.en, cn:word.cn, phonetic:word.phonetic||'', wrongCount:0, correctStreak:0, mastered:false, createdAt:Date.now(), lastWrongAt:Date.now()};
+      const id = uid('e');
+      entry = {id:id, wordId:'error:'+id, libraryId:null, en:word.en, cn:word.cn, phonetic:word.phonetic||'', example:word.example||'', exampleCn:word.exampleCn||'', wrongCount:0, correctStreak:0, mastered:false, createdAt:Date.now(), lastWrongAt:Date.now()};
       state.errorBook.push(entry);
       outcome.newError = true;
     }
-    entry.en = word.en; entry.cn = word.cn; entry.phonetic = word.phonetic||'';
     entry.wrongCount = (entry.wrongCount||0)+1;
     entry.correctStreak = 0;
     entry.mastered = false;
     entry.lastWrongAt = Date.now();
-    entry.libraryId = word.libraryId||entry.libraryId;
   }
   return outcome;
 }
@@ -3109,7 +3173,7 @@ function errorRowHtml(e){
   const prog = Math.min(2,streak);
   return '<div class="error-row">'+
     '<div class="error-main"><div class="error-avatar">'+esc((e.en||'?').slice(0,1).toUpperCase())+'</div><div style="min-width:0"><div class="error-word">'+esc(e.en)+'</div><div class="error-cn">'+esc(e.cn)+'</div>'+
-      '<div class="error-meta"><span>错 '+(e.wrongCount||0)+' 次</span><span class="sep"></span><span>'+esc(lib?lib.name:'词库已删除')+'</span><span class="sep"></span><span>'+esc(fmtRelative(e.lastWrongAt))+'</span>'+(e.mastered?'<span class="badge badge-green" style="font-size:9px;padding:2px 6px">已掌握</span>':'')+'</div></div></div>'+
+      '<div class="error-meta"><span>错 '+(e.wrongCount||0)+' 次</span><span class="sep"></span><span>'+esc('独立错题本')+'</span><span class="sep"></span><span>'+esc(fmtRelative(e.lastWrongAt))+'</span>'+(e.mastered?'<span class="badge badge-green" style="font-size:9px;padding:2px 6px">已掌握</span>':'')+'</div></div></div>'+
     '<div class="error-side"><div class="error-progress"><span>掌握进度</span><div class="bar"><i style="width:'+(prog/2*100)+'%"></i></div><span>'+prog+'/2</span></div>'+
       '<div class="error-actions">'+'<button class="icon-btn sm" data-action="speak-text" data-text="'+esc(e.en)+'" title="朗读单词" aria-label="朗读单词">'+icon('volume',14)+'</button>'+(word?'<button class="btn btn-soft" data-action="error-practice" data-id="'+e.wordId+'">练一下</button>':'<button class="btn btn-ghost" disabled>词条已删</button>')+'<button class="btn btn-ghost" data-action="error-master" data-id="'+e.wordId+'">'+(e.mastered?'重新攻克':'标记已掌握')+'</button><button class="icon-btn sm danger" data-action="error-remove" data-id="'+e.wordId+'" title="移出错题本">'+icon('trash',14)+'</button></div>'+
     '</div>'+
@@ -3480,23 +3544,21 @@ function deleteWord(id){
   const w = findWord(id);
   if(!w) return;
   const lib = getLib(w.libraryId) || activeLib();
-  askConfirm({title:'删除「'+esc(w.en)+'」？', message:'会同时删除这个词的学习统计和错题记录，无法恢复。', confirmText:'删除', danger:true}).then(function(ok){
+  askConfirm({title:'删除「'+esc(w.en)+'」？', message:'会删除这个词及其学习统计，错题本中的独立记录会保留。', confirmText:'删除', danger:true}).then(function(ok){
     if(!ok) return;
     lib.words = lib.words.filter(function(x){return x.id!==id;});
     delete state.stats[id];
-    state.errorBook = state.errorBook.filter(function(x){return x.wordId!==id;});
     saveState(); render(); toast('已删除「'+w.en+'」');
   });
 }
 function deleteLibrary(){
   if(state.libraries.length<=1){ toast('至少保留一个词库','error'); return; }
   const lib = activeLib();
-  askConfirm({title:'删除词库「'+esc(lib.name)+'」？', message:'词库内的 '+lib.words.length+' 个词、学习统计和错题记录都会删除，无法恢复。建议先导出备份。', confirmText:'删除词库', danger:true}).then(function(ok){
+  askConfirm({title:'删除词库「'+esc(lib.name)+'」？', message:'词库内的 '+lib.words.length+' 个词及其学习统计会删除，错题本中的独立记录会保留。建议先导出备份。', confirmText:'删除词库', danger:true}).then(function(ok){
     if(!ok) return;
     const ids = new Set(lib.words.map(function(w){return w.id;}));
     state.libraries = state.libraries.filter(function(l){return l.id!==lib.id;});
     ids.forEach(function(wid){ delete state.stats[wid]; });
-    state.errorBook = state.errorBook.filter(function(e){return !ids.has(e.wordId) && e.libraryId!==lib.id;});
     state.activeLibraryId = state.libraries[0].id;
     ui.wordPage = 1; ui.wordFilter = 'all'; ui.wordSearch = '';
     saveState(); render(); toast('词库已删除');

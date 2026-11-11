@@ -79,7 +79,7 @@
     return '<button type="button" class="icon-btn sm rd-speak" data-action="speak-text" data-text="' + esc(value) + '" title="' + label + '" aria-label="' + label + '">' + (typeof icon === 'function' ? icon('volume', 15) : '🔊') + '</button>';
   }
   function wordPanelInner() {
-    return '<p class="rd-current">当前单词：<b>' + esc(selectedWord || '尚未选择') + '</b>' + speakButton(selectedWord, '朗读单词') + '</p><div class="rd-result" role="status">' + esc(wordResult) + '</div><label class="rd-label" for="rd-meaning">保存到词库的中文释义（可编辑）</label><textarea id="rd-meaning" placeholder="选择单词后可在此编辑释义">' + esc(wordResult) + '</textarea><button type="button" class="btn btn-primary rd-save" data-action="rd-save-word">保存到词库和错题本</button>';
+    return '<p class="rd-current">当前单词：<b>' + esc(selectedWord || '尚未选择') + '</b>' + speakButton(selectedWord, '朗读单词') + '</p><div class="rd-result" role="status">' + esc(wordResult) + '</div><label class="rd-label" for="rd-meaning">保存到错题本的中文释义（可编辑）</label><textarea id="rd-meaning" placeholder="选择单词后可在此编辑释义">' + esc(wordResult) + '</textarea><button type="button" class="btn btn-primary rd-save" data-action="rd-save-word">保存到错题本</button>';
   }
   function sentencePanelInner() {
     const list = sentenceExpressions.map(function (item, i) {
@@ -188,47 +188,18 @@
   function saveWord() {
     const input = document.getElementById('rd-meaning'), cn = input ? input.value.trim() : '';
     if (!selectedWord || !cn || cn === '查询中…') { toast('请选择单词并填写中文释义', 'error'); return; }
-    const lib = activeLib();
-    if (!lib || !Array.isArray(lib.words)) { toast('没有可用词库', 'error'); return; }
-    let word = lib.words.find(function (w) { return w.en.toLowerCase() === selectedWord.toLowerCase(); });
-    if (!word) { word = {id:newId('w'), en:selectedWord, cn:cn, phonetic:'', example:'', exampleCn:'', libraryId:lib.id}; lib.words.push(word); }
-    let entry = state.errorBook.find(function (e) { return e.wordId === word.id; });
-    const repeated = !!entry;
-    if (!entry) { const now = Date.now(); entry = {id:newId('e'), wordId:word.id, libraryId:lib.id, en:word.en, cn:word.cn, phonetic:word.phonetic || '', wrongCount:1, correctStreak:0, mastered:false, createdAt:now, lastWrongAt:now}; state.errorBook.push(entry); }
-    else { entry.wrongCount = (entry.wrongCount || 0) + 1; entry.mastered = false; entry.correctStreak = 0; entry.lastWrongAt = Date.now(); }
-    word.cn = cn; entry.cn = cn;
-    saveState(); toast(repeated ? '已在错题本，错词权重 +1（累计 ' + entry.wrongCount + ' 次）' : '已保存到词库和错题本'); refreshWordPanel();
+    const result = saveIndependentError({en:selectedWord, cn:cn, phonetic:'', example:'', exampleCn:''});
+    if (!result || !result.ok) { toast('保存失败，请检查浏览器存储后重试', 'error'); return; }
+    toast(result.repeated ? '已在错题本，错词权重 +1（累计 ' + result.entry.wrongCount + ' 次）' : '已保存到错题本'); refreshWordPanel();
   }
   function saveExpression(index) {
     const item = sentenceExpressions[Number(index)];
     const text = item ? String(item.text || '').trim() : '', meaning = item ? String(item.label || '').trim() : '';
     if (!text) { toast('请先翻译并解析句子', 'error'); return; }
     if (!meaning) { toast('该搭配没有中文释义，暂时无法收藏', 'error'); return; }
-    const libs = Array.isArray(state.libraries) ? state.libraries : [];
-    const lib = libs.find(function (l) { return l && l.id === state.activeLibraryId && Array.isArray(l.words); });
-    if (!lib) { toast('请先在词研选择有效的词库', 'error'); return; }
-    if (!Array.isArray(state.errorBook)) { toast('词研错题本不可用', 'error'); return; }
-    const key = function (s) { return String(s || '').trim().replace(/\s+/g, ' ').toLowerCase(); };
-    let word = lib.words.find(function (w) { return w && key(w.en) === key(text); });
-    let created = false;
-    if (!word) {
-      let id = newId('w');
-      while (libs.some(function (l) { return l && Array.isArray(l.words) && l.words.some(function (w) { return w && w.id === id; }); })) id = newId('w');
-      word = {id:id, en:text, cn:meaning, phonetic:'', example:selectedSentence, exampleCn:sentenceResult === '翻译和解析中…' ? '' : sentenceResult, libraryId:lib.id};
-      lib.words.push(word); created = true;
-    }
-    let entry = state.errorBook.find(function (e) { return e && e.wordId === word.id; });
-    const oldEntry = entry ? {mastered:entry.mastered, correctStreak:entry.correctStreak, lastWrongAt:entry.lastWrongAt, wrongCount:entry.wrongCount || 0} : null;
-    if (entry) { entry.wrongCount = (entry.wrongCount || 0) + 1; entry.mastered = false; entry.correctStreak = 0; entry.lastWrongAt = Date.now(); entry.cn = meaning; }
-    else { const now = Date.now(); entry = {id:newId('e'), wordId:word.id, libraryId:lib.id, en:word.en, cn:meaning, phonetic:'', wrongCount:1, correctStreak:0, mastered:false, createdAt:now, lastWrongAt:now}; state.errorBook.push(entry); }
-    if (!word.cn) word.cn = meaning;
-    saveState();
-    if (typeof storageOK !== 'undefined' && !storageOK) {
-      if (created) lib.words.splice(lib.words.indexOf(word), 1);
-      if (oldEntry) Object.assign(entry, oldEntry); else state.errorBook.splice(state.errorBook.indexOf(entry), 1);
-      toast('保存失败，请检查浏览器存储后重试', 'error'); return;
-    }
-    refreshSentencePanel(); toast(oldEntry ? '已再次标记，错词权重 +1（累计 ' + entry.wrongCount + ' 次）' : '已收藏到词研错题本');
+    const result = saveIndependentError({en:text, cn:meaning, phonetic:'', example:selectedSentence, exampleCn:sentenceResult === '翻译和解析中…' ? '' : sentenceResult});
+    if (!result || !result.ok) { toast('保存失败，请检查浏览器存储后重试', 'error'); return; }
+    refreshSentencePanel(); toast(result.repeated ? '已再次标记，错词权重 +1（累计 ' + result.entry.wrongCount + ' 次）' : '已收藏到词研错题本');
   }
   function saveSentence() {
     if (!selectedSentence) { toast('请先选择句子', 'error'); return; }

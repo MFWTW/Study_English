@@ -86,11 +86,11 @@
     (Array.isArray(state.errorBook) ? state.errorBook : []).forEach(function (e) {
       if (!e) return;
       const w = e.wordId != null ? findWord(e.wordId) : null;
-      const en = String((w && w.en) || e.en || '').trim(), key = en.toLocaleLowerCase();
+      const en = String(e.en || (w && w.en) || '').trim(), key = en.replace(/\s+/g, ' ').toLocaleLowerCase();
       if (!key) return;
       const time = timestamp(e.lastWrongAt), previous = seen.get(key);
       if (previous) { if (time != null && (previous.time == null || time > previous.time)) previous.time = time; return; }
-      seen.set(key, {en: en, cn: String((w && w.cn) || e.cn || ''), example: String((w && w.example) || ''), exampleCn: String((w && w.exampleCn) || ''), time: time});
+      seen.set(key, {en: en, cn: String(e.cn || (w && w.cn) || ''), example: String(e.example || (w && w.example) || ''), exampleCn: String(e.exampleCn || (w && w.exampleCn) || ''), time: time});
     });
     return Array.from(seen.values());
   }

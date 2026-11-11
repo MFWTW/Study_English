@@ -40,31 +40,9 @@
   function saveExpressionToWord(text, meaning, sentence) {
     text = String(text || '').trim(); meaning = String(meaning || '').trim();
     if (!text || !meaning) { toast('请填写固定表达和中文释义', 'error'); return; }
-    var libs = Array.isArray(state.libraries) ? state.libraries : [];
-    var lib = libs.find(function (l) { return l && l.id === state.activeLibraryId && Array.isArray(l.words); });
-    if (!lib) { toast('请先在词研选择有效的词库', 'error'); return; }
-    var key = function (s) { return String(s || '').trim().replace(/\s+/g, ' ').toLowerCase(); };
-    if (typeof currentAccount !== 'undefined' && !currentAccount) { toast('请先登录后再收藏', 'error'); return; }
-    if (!Array.isArray(state.errorBook)) { toast('词研错题本不可用', 'error'); return; }
-    var word = lib.words.find(function (w) { return w && key(w.en) === key(text); });
-    var createdWord = !word;
-    if (!word) {
-      var id = makeId();
-      while (libs.some(function (l) { return l && Array.isArray(l.words) && l.words.some(function (w) { return w && w.id === id; }); })) id = makeId();
-      word = {id:id, en:text, cn:meaning, phonetic:'', example:sentence ? sentence.text : '', exampleCn:sentence ? (sentence.translation || (sentence.analysisDetail && sentence.analysisDetail.translation) || '') : '', libraryId:lib.id};
-      lib.words.unshift(word);
-    }
-    var error = state.errorBook.find(function (e) { return e && e.wordId === word.id; });
-    var oldError = error ? {mastered:error.mastered, correctStreak:error.correctStreak, lastWrongAt:error.lastWrongAt, wrongCount:error.wrongCount || 0} : null;
-    if (error) { error.wrongCount = (error.wrongCount || 0) + 1; error.mastered = false; error.correctStreak = 0; error.lastWrongAt = Date.now(); }
-    else { var now = Date.now(); error = {id:makeId(), wordId:word.id, libraryId:lib.id, en:word.en, cn:word.cn, phonetic:word.phonetic || '', wrongCount:1, correctStreak:0, mastered:false, createdAt:now, lastWrongAt:now}; state.errorBook.push(error); }
-    saveState();
-    if (typeof storageOK !== 'undefined' && !storageOK) {
-      if (createdWord) lib.words.splice(lib.words.indexOf(word), 1);
-      if (oldError) Object.assign(error, oldError); else state.errorBook.splice(state.errorBook.indexOf(error), 1);
-      toast('保存失败，请检查浏览器存储后重试', 'error'); return;
-    }
-    refresh(); toast(oldError ? '已再次标记，错词权重 +1（累计 ' + error.wrongCount + ' 次）' : '已收藏到词研错题本');
+    var result = saveIndependentError({en:text, cn:meaning, phonetic:'', example:sentence ? sentence.text : '', exampleCn:sentence ? (sentence.translation || (sentence.analysisDetail && sentence.analysisDetail.translation) || '') : ''});
+    if (!result || !result.ok) { toast('保存失败，请检查浏览器存储后重试', 'error'); return; }
+    refresh(); toast(result.repeated ? '已再次标记，错词权重 +1（累计 ' + result.entry.wrongCount + ' 次）' : '已收藏到词研错题本');
   }
   function tomorrow() {
     var d = new Date();
