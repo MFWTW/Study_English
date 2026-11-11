@@ -659,6 +659,16 @@ dialog[open]{display:block;animation:popIn .18s ease-out}
 .error-toolbar .filter-chips{flex:1;min-width:180px}
 .error-toolbar .search-box{flex:0 1 240px;min-width:170px;max-width:240px}
 .error-list{padding:4px 17px}
+.error-carousel{padding:11px 0 9px}
+.error-viewport{overflow:hidden;touch-action:pan-y}
+.error-track{display:flex;transition:transform .3s cubic-bezier(.4,0,.2,1);will-change:transform}
+.error-slide{flex:0 0 100%;min-width:100%}
+.error-slide .error-row{padding:6px 2px 10px;border-bottom:0}
+.error-nav{display:flex;align-items:center;justify-content:center;gap:14px;padding:2px 0 4px}
+.error-counter{font-size:12px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.error-counter b{color:var(--ink);font-size:13px}
+.error-nav .icon-btn[disabled]{opacity:.3;pointer-events:none}
+.error-hint{font-size:11px;color:var(--ink-3);text-align:center;padding-bottom:2px}
 .error-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:13px;align-items:center;padding:14px 0;border-bottom:1px solid #f0ebdf}
 .error-row:last-child{border-bottom:0}
 .error-main{min-width:0;display:flex;align-items:flex-start;gap:11px}
@@ -890,6 +900,7 @@ kbd{font-family:var(--sans);font-size:9.5px;padding:2px 5px;border:1px solid #dc
   .error-row{grid-template-columns:1fr}
   .error-side{flex-direction:row;align-items:center;justify-content:space-between;width:100%}
   .error-list{padding:4px 13px}
+  .error-carousel{padding:9px 0 7px}
   .error-toolbar{padding:11px 13px}
   .error-toolbar .search-box{flex:1 1 100%;max-width:none;min-width:0}
   .error-kpi{padding:12px}
@@ -1195,6 +1206,7 @@ function resetUiForAccount(){
   ui.wordPage = 1;
   ui.errorFilter = 'open';
   ui.errorSearch = '';
+  ui.errorIndex = 0;
   ui.importRows = [];
   ui.importMeta = null;
 }
@@ -1662,6 +1674,7 @@ const ui = {
   wordPageSize:12,
   errorFilter:'open',
   errorSearch:'',
+  errorIndex:0,
   importRows:[],
   importMeta:null,
   autoNextTimer:null,
@@ -3079,32 +3092,73 @@ function startAllErrors(){
   if(!words.length){ toast('当前没有待攻克的错题','success'); return; }
   startQuiz({words:words, mode:'mixed', scope:'errors', count:Math.min(20,words.length), libId:words[0].libraryId||state.activeLibraryId});
 }
-function renderErrors(){
-  const open = state.errorBook.filter(function(e){return !e.mastered;});
-  const mastered = state.errorBook.filter(function(e){return e.mastered;});
+function errorListData(){
   const q = ui.errorSearch.trim().toLowerCase();
   let list = state.errorBook.slice();
   if(ui.errorFilter==='open') list = list.filter(function(e){return !e.mastered;});
   else if(ui.errorFilter==='mastered') list = list.filter(function(e){return e.mastered;});
   if(q) list = list.filter(function(e){ return (e.en||'').toLowerCase().indexOf(q)>=0 || (e.cn||'').indexOf(q)>=0; });
   list.sort(function(a,b){ return (b.lastWrongAt||0)-(a.lastWrongAt||0); });
+  return {list:list, q:q};
+}
+function errorRowHtml(e){
+  const lib = state.libraries.find(function(l){return l.id===e.libraryId;});
+  const word = findWord(e.wordId);
+  const streak = e.correctStreak||0;
+  const prog = Math.min(2,streak);
+  return '<div class="error-row">'+
+    '<div class="error-main"><div class="error-avatar">'+esc((e.en||'?').slice(0,1).toUpperCase())+'</div><div style="min-width:0"><div class="error-word">'+esc(e.en)+'</div><div class="error-cn">'+esc(e.cn)+'</div>'+
+      '<div class="error-meta"><span>错 '+(e.wrongCount||0)+' 次</span><span class="sep"></span><span>'+esc(lib?lib.name:'词库已删除')+'</span><span class="sep"></span><span>'+esc(fmtRelative(e.lastWrongAt))+'</span>'+(e.mastered?'<span class="badge badge-green" style="font-size:9px;padding:2px 6px">已掌握</span>':'')+'</div></div></div>'+
+    '<div class="error-side"><div class="error-progress"><span>掌握进度</span><div class="bar"><i style="width:'+(prog/2*100)+'%"></i></div><span>'+prog+'/2</span></div>'+
+      '<div class="error-actions">'+'<button class="icon-btn sm" data-action="speak-text" data-text="'+esc(e.en)+'" title="朗读单词" aria-label="朗读单词">'+icon('volume',14)+'</button>'+(word?'<button class="btn btn-soft" data-action="error-practice" data-id="'+e.wordId+'">练一下</button>':'<button class="btn btn-ghost" disabled>词条已删</button>')+'<button class="btn btn-ghost" data-action="error-master" data-id="'+e.wordId+'">'+(e.mastered?'重新攻克':'标记已掌握')+'</button><button class="icon-btn sm danger" data-action="error-remove" data-id="'+e.wordId+'" title="移出错题本">'+icon('trash',14)+'</button></div>'+
+    '</div>'+
+  '</div>';
+}
+function applyErrorSlide(){
+  const win = document.getElementById('error-window');
+  if(!win) return;
+  const track = win.querySelector('.error-track');
+  if(track) track.style.transform = 'translateX(-'+(ui.errorIndex*100)+'%)';
+  const count = Number(win.dataset.count)||0;
+  const counter = win.querySelector('.error-counter');
+  if(counter && count) counter.innerHTML = '<b>'+(ui.errorIndex+1)+'</b> / '+count;
+  const prev = win.querySelector('[data-action="error-prev"]');
+  const next = win.querySelector('[data-action="error-next"]');
+  if(prev) prev.disabled = ui.errorIndex<=0;
+  if(next) next.disabled = ui.errorIndex>=count-1;
+}
+function moveErrorSlide(delta){
+  const list = errorListData().list;
+  if(!list.length) return;
+  const next = Math.min(list.length-1, Math.max(0, (ui.errorIndex||0)+delta));
+  if(next===(ui.errorIndex||0)) return;
+  ui.errorIndex = next;
+  applyErrorSlide();
+}
+function renderErrors(){
+  const open = state.errorBook.filter(function(e){return !e.mastered;});
+  const mastered = state.errorBook.filter(function(e){return e.mastered;});
+  const data = errorListData();
+  const list = data.list;
+  const q = data.q;
+  ui.errorIndex = list.length ? Math.min(Math.max(0, ui.errorIndex|0), list.length-1) : 0;
   const totalWrong = state.errorBook.reduce(function(n,e){return n+(e.wrongCount||0);},0);
   const filters = [['open','待攻克',open.length],['mastered','已掌握',mastered.length],['all','全部',state.errorBook.length]].map(function(f){
     return '<button class="chip '+(ui.errorFilter===f[0]?'active':'')+'" data-action="error-filter" data-filter="'+f[0]+'">'+f[1]+' <span class="num">'+f[2]+'</span></button>';
   }).join('');
-  const rows = list.length ? list.map(function(e){
-    const lib = state.libraries.find(function(l){return l.id===e.libraryId;});
-    const word = findWord(e.wordId);
-    const streak = e.correctStreak||0;
-    const prog = Math.min(2,streak);
-    return '<div class="error-row">'+
-      '<div class="error-main"><div class="error-avatar">'+esc((e.en||'?').slice(0,1).toUpperCase())+'</div><div style="min-width:0"><div class="error-word">'+esc(e.en)+'</div><div class="error-cn">'+esc(e.cn)+'</div>'+
-        '<div class="error-meta"><span>错 '+(e.wrongCount||0)+' 次</span><span class="sep"></span><span>'+esc(lib?lib.name:'词库已删除')+'</span><span class="sep"></span><span>'+esc(fmtRelative(e.lastWrongAt))+'</span>'+(e.mastered?'<span class="badge badge-green" style="font-size:9px;padding:2px 6px">已掌握</span>':'')+'</div></div></div>'+
-      '<div class="error-side"><div class="error-progress"><span>掌握进度</span><div class="bar"><i style="width:'+(prog/2*100)+'%"></i></div><span>'+prog+'/2</span></div>'+
-        '<div class="error-actions">'+'<button class="icon-btn sm" data-action="speak-text" data-text="'+esc(e.en)+'" title="朗读单词" aria-label="朗读单词">'+icon('volume',14)+'</button>'+(word?'<button class="btn btn-soft" data-action="error-practice" data-id="'+e.wordId+'">练一下</button>':'<button class="btn btn-ghost" disabled>词条已删</button>')+'<button class="btn btn-ghost" data-action="error-master" data-id="'+e.wordId+'">'+(e.mastered?'重新攻克':'标记已掌握')+'</button><button class="icon-btn sm danger" data-action="error-remove" data-id="'+e.wordId+'" title="移出错题本">'+icon('trash',14)+'</button></div>'+
+  const rows = list.length ?
+    '<div class="error-carousel" id="error-window" data-count="'+list.length+'">'+
+      '<div class="error-viewport"><div class="error-track" style="transform:translateX(-'+(ui.errorIndex*100)+'%)">'+
+        list.map(function(e){ return '<div class="error-slide">'+errorRowHtml(e)+'</div>'; }).join('')+
+      '</div></div>'+
+      '<div class="error-nav">'+
+        '<button class="icon-btn sm" data-action="error-prev" aria-label="上一个错题" title="上一个"'+(ui.errorIndex<=0?' disabled':'')+'>'+icon('chevronLeft',15)+'</button>'+
+        '<span class="error-counter"><b>'+(ui.errorIndex+1)+'</b> / '+list.length+'</span>'+
+        '<button class="icon-btn sm" data-action="error-next" aria-label="下一个错题" title="下一个"'+(ui.errorIndex>=list.length-1?' disabled':'')+'>'+icon('chevronRight',15)+'</button>'+
       '</div>'+
-    '</div>';
-  }).join('') : '<div class="empty"><div class="empty-icon">'+icon('errors',26)+'</div><h3>'+(q?'没有匹配的错题':ui.errorFilter==='mastered'?'还没有已掌握的错题':'还没有待攻克的错题')+'</h3><p>'+(q?'试试别的关键词，或切换筛选条件。':'刷题时答错的词会自动出现在这里。连续答对 2 次后移入「已掌握」。')+'</p><button class="btn btn-primary btn-sm" '+(open.length?'data-action="start-errors"':'data-action="go" data-page="quiz"')+'>'+icon(open.length?'refresh':'play',14)+(open.length?'开始错题重练':'去刷一组题')+'</button></div>';
+      '<div class="error-hint">左右滑动切换错题 · 共 '+list.length+' 条</div>'+
+    '</div>' :
+    '<div class="empty"><div class="empty-icon">'+icon('errors',26)+'</div><h3>'+(q?'没有匹配的错题':ui.errorFilter==='mastered'?'还没有已掌握的错题':'还没有待攻克的错题')+'</h3><p>'+(q?'试试别的关键词，或切换筛选条件。':'刷题时答错的词会自动出现在这里。连续答对 2 次后移入「已掌握」。')+'</p><button class="btn btn-primary btn-sm" '+(open.length?'data-action="start-errors"':'data-action="go" data-page="quiz"')+'>'+icon(open.length?'refresh':'play',14)+(open.length?'开始错题重练':'去刷一组题')+'</button></div>';
   return '<div class="page-actions"><div class="left"><div class="page-intro">错题自动留存，不用手动抄。优先清「待攻克」，连续答对 2 次即可移入已掌握。</div></div><div class="right">'+(mastered.length?'<button class="btn btn-ghost" data-action="clear-mastered">'+icon('trash',15)+'清空已掌握</button>':'')+(open.length?'<button class="btn btn-primary" data-action="start-errors">'+icon('refresh',15)+'开始错题重练</button>':'')+'</div></div>'+
     '<div class="error-kpis">'+
       '<div class="card error-kpi"><div class="stat-icon red">'+icon('errors',17)+'</div><div><b>'+open.length+'</b><span>待攻克错题</span></div></div>'+
@@ -3354,8 +3408,10 @@ document.addEventListener('click', function(e){
   if(action==='next-quiz-group'){ nextQuizGroup(); return; }
   if(action==='restart-quiz-round'){ restartQuizRound(); return; }
   if(action==='error-filter'){
-    ui.errorFilter = el.dataset.filter; render(); return;
+    ui.errorFilter = el.dataset.filter; ui.errorIndex = 0; render(); return;
   }
+  if(action==='error-prev'){ moveErrorSlide(-1); return; }
+  if(action==='error-next'){ moveErrorSlide(1); return; }
   if(action==='start-errors'){ startAllErrors(); return; }
   if(action==='error-practice'){
     const w = findWord(id);
@@ -3392,10 +3448,30 @@ document.addEventListener('input', function(e){
   if(t.id==='errorSearch'){
     const pos = t.selectionStart;
     ui.errorSearch = t.value;
+    ui.errorIndex = 0;
     clearTimeout(searchTimer);
     searchTimer = setTimeout(function(){ render(); refocus('errorSearch',pos); },180);
   }
 });
+let errorSwipeStart = null;
+document.addEventListener('touchstart', function(e){
+  const target = e.target;
+  const win = target && target.closest ? target.closest('#error-window') : null;
+  if(!win || !e.touches || e.touches.length!==1){ errorSwipeStart = null; return; }
+  const t = e.touches[0];
+  errorSwipeStart = {x:t.clientX, y:t.clientY};
+}, {passive:true});
+document.addEventListener('touchend', function(e){
+  if(!errorSwipeStart) return;
+  const t = e.changedTouches && e.changedTouches[0];
+  const start = errorSwipeStart;
+  errorSwipeStart = null;
+  if(!t) return;
+  const dx = t.clientX - start.x;
+  const dy = t.clientY - start.y;
+  if(Math.abs(dx) < 46 || Math.abs(dx) < Math.abs(dy)*1.4) return;
+  moveErrorSlide(dx < 0 ? 1 : -1);
+}, {passive:true});
 function deleteWord(id){
   const w = findWord(id);
   if(!w) return;
