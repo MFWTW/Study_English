@@ -988,6 +988,7 @@ kbd{font-family:var(--sans);font-size:9.5px;padding:2px 5px;border:1px solid #dc
 <!-- Configure window.YINGYAN_CLOUD_CONFIG before cloud-module.js with the exact
      project URL and, only after deployment, the verified CAS RPC name. -->
 <script src="cloud-config.js"></script>
+<script src="cloud-hash.js"></script>
 <script src="cloud-module.js"></script>
 <script>
 /* ============================================================
@@ -1349,7 +1350,7 @@ let cloudAuto = null;
 function cloudMetaKey(id){ return 'ciyan_cloud_sync_v1_'+id; }
 function cloudNotice(text){ if(cloudAuto) cloudAuto.status=text; const el=document.getElementById('cloudStatus'); if(el) el.textContent=text; const badge=document.getElementById('cloudSyncBadge'); if(badge) badge.textContent=text; }
 function cloudStoreMeta(c){
-  try { localStorage.setItem(cloudMetaKey(c.id), JSON.stringify({version:c.version,dirty:c.dirty,cleanSnapshot:c.cleanSnapshot || null})); return true; }
+  try { localStorage.setItem(cloudMetaKey(c.id), JSON.stringify({version:c.version,dirty:c.dirty,cleanHash:c.cleanHash || null})); return true; }
   catch(e){ c.blocked=true; cloudNotice('同步暂停：无法保存本地同步状态，请导出备份。'); return false; }
 }
 function markCloudDirty(){
@@ -1366,31 +1367,47 @@ function markCloudDirty(){
 async function flushCloud(c){
   if(c!==cloudAuto || c.blocked || c.running || !c.dirty || !currentAccount || currentAccount.id!==c.id) return;
   if(c.localSnapshot!==localStorage.getItem(stateKeyFor(c.id))){ c.blocked=true; cloudNotice('另一标签页修改了本机数据，同步已暂停；请导出备份。'); toast('检测到其他标签页修改，同步已暂停。','error'); return; }
-  c.running=true; const snapshot=JSON.stringify(state); cloudNotice('正在同步…');
+  const snapshot=JSON.stringify(state);
+  if(snapshot!==c.localSnapshot){ c.blocked=true; cloudNotice('本机数据尚未安全保存，同步已暂停；请导出备份。'); return; }
+  c.running=true; cloudNotice('正在同步…');
   try {
     const result=await window.YingyanCloud.writeState(JSON.parse(snapshot),c.version);
     if(c!==cloudAuto) return;
     if(c.localSnapshot!==localStorage.getItem(stateKeyFor(c.id))){ c.blocked=true; cloudNotice('另一标签页修改了本机数据，同步已暂停，请先备份。'); toast('检测到其他标签页修改，请先导出备份。','error'); return; }
     c.version=result.version; c.dirty=JSON.stringify(state)!==snapshot;
-    c.cleanSnapshot=snapshot;
+    c.retryDelay=1500; c.cleanHash=window.YingyanHash.sha256(snapshot);
     if(!cloudStoreMeta(c)) return;
     cloudNotice(c.dirty?'本地有新更改，继续同步…':'已同步到云端');
   } catch(e) {
     if(c!==cloudAuto) return;
-    c.blocked=true; cloudStoreMeta(c);
-    cloudNotice('同步失败或版本冲突：本地数据已保留，请先导出备份，再在设置中处理。');
-    toast('云同步失败或发生冲突，本地数据已保留，请检查设置。','error');
+    if(e && e.network){
+      c.retryDelay=Math.min((c.retryDelay || 7500)*2,60000);
+      cloudNotice('网络不可用，本地数据已保留，将自动重试。');
+    } else {
+      c.blocked=true; cloudStoreMeta(c);
+      cloudNotice('同步失败或版本冲突：本地数据已保留，请先导出备份，再在设置中处理。');
+      toast('云同步失败或发生冲突，本地数据已保留，请检查设置。','error');
+    }
   } finally {
     c.running=false;
-    if(c===cloudAuto && c.dirty && !c.blocked){ clearTimeout(c.timer); c.timer=setTimeout(function(){flushCloud(c);},1500); }
+    if(c===cloudAuto && c.dirty && !c.blocked){ clearTimeout(c.timer); c.timer=setTimeout(function(){flushCloud(c);},c.retryDelay || 1500); }
   }
 }
 function beginCloudSync(id, serverVersion, hadLocal){
   let saved=null;
   try { saved=JSON.parse(localStorage.getItem(cloudMetaKey(id)) || 'null'); } catch(e) {}
   const localSnapshot=localStorage.getItem(stateKeyFor(id));
-  const compatible=hadLocal && saved && Number.isSafeInteger(saved.version) && saved.version===serverVersion && (saved.dirty===true || (typeof saved.cleanSnapshot==='string' && saved.cleanSnapshot===localSnapshot));
-  cloudAuto={id:id,version:hadLocal ? (saved && Number.isSafeInteger(saved.version) ? saved.version : null) : serverVersion,cleanSnapshot:hadLocal && saved ? saved.cleanSnapshot : null,dirty:!hadLocal || !!(saved && saved.dirty),blocked:!!hadLocal && !compatible,running:false,timer:null,status:'云账号 · 已连接',localSnapshot:localSnapshot};
+  let cleanHash=saved && typeof saved.cleanHash==='string' ? saved.cleanHash : null;
+  let cleanMatches=false;
+  if(hadLocal && saved && saved.dirty!==true && typeof localSnapshot==='string'){
+    if(typeof saved.cleanSnapshot==='string'){
+      // Upgrade old metadata only after checking its original snapshot exactly.
+      cleanMatches=saved.cleanSnapshot===localSnapshot;
+      if(cleanMatches) cleanHash=window.YingyanHash.sha256(localSnapshot);
+    } else if(cleanHash){ cleanMatches=window.YingyanHash.sha256(localSnapshot)===cleanHash; }
+  }
+  const compatible=hadLocal && saved && Number.isSafeInteger(saved.version) && saved.version===serverVersion && (saved.dirty===true || cleanMatches);
+  cloudAuto={id:id,version:hadLocal ? (saved && Number.isSafeInteger(saved.version) ? saved.version : null) : serverVersion,cleanHash:cleanHash,dirty:!hadLocal || !!(saved && saved.dirty),blocked:!!hadLocal && !compatible,running:false,timer:null,status:'云账号 · 已连接',localSnapshot:localSnapshot};
   const c=cloudAuto;
   c.onVisible=function(){
     if(c!==cloudAuto || document.visibilityState==='hidden') return;
@@ -1399,6 +1416,9 @@ function beginCloudSync(id, serverVersion, hadLocal){
   c.visitTimer=setInterval(c.onVisible,6*60*60*1000);
   document.addEventListener('visibilitychange',c.onVisible);
   if(cloudAuto.blocked){ cloudNotice('云端和本机版本不一致，同步已暂停'); toast('云端与本机版本无法确认一致，已暂停同步；请先备份并在设置中选择。','error'); return; }
+  // Normalization may reset daily counters or migrate legacy fields. Persist
+  // this projection before uploading it; the dirty marker is already durable.
+  if(c.dirty && c.localSnapshot!==JSON.stringify(state)){ saveState(); if(!storageOK || c.blocked) return; }
   cloudNotice(cloudAuto.dirty?'本地已保存，等待云端同步…':'已同步到云端');
   if(cloudStoreMeta(cloudAuto) && cloudAuto.dirty) cloudAuto.timer=setTimeout(function(){if(cloudAuto) flushCloud(cloudAuto);},1500);
 }
@@ -1422,6 +1442,7 @@ async function doCloudLogin(){
     // A project/user-specific workspace cannot collide with any local account.
     const id='cloud_'+encodeURIComponent(user.origin)+'_'+encodeURIComponent(user.id);
     const key=stateKeyFor(id), existing=localStorage.getItem(key);
+    let downloaded=false;
     if(existing!==null){
       let cached; try { cached=JSON.parse(existing); } catch(e) {}
       if(!cached || !Array.isArray(cached.libraries) || !cached.libraries.length) throw Error('本机云账号工作区数据无效，已保留原数据，请先备份并修复。');
@@ -1431,11 +1452,17 @@ async function doCloudLogin(){
       const initial=JSON.stringify(normalizeState(row.data));
       localStorage.setItem(key,initial);
       if(localStorage.getItem(key)!==initial) throw Error('本地工作区保存失败。');
+      // Record the locally normalized projection as a clean baseline. Merely
+      // viewing an existing cloud account must not write it back to the server.
+      const meta=JSON.stringify({version:row.version,dirty:false,cleanHash:window.YingyanHash.sha256(initial)});
+      localStorage.setItem(cloudMetaKey(id),meta);
+      if(localStorage.getItem(cloudMetaKey(id))!==meta) throw Error('本地同步状态保存失败，请保留备份。');
+      downloaded=true;
     }
     authBusy=false;
     enterAccount({id:id,username:user.username,cloudIdentity:user});
     if(!row || !Number.isSafeInteger(row.version)) throw Error('云端版本不可用，未开启自动同步。');
-    beginCloudSync(id,row.version,existing!==null);
+    beginCloudSync(id,row.version,existing!==null || downloaded);
   } catch(e) {
     cloud.signOut(); authBusy=false; currentAccount=null; state=null;
     document.body.classList.add('auth-open');
@@ -1682,6 +1709,7 @@ function saveState(){
     storageOK = true;
   }catch(e){
     storageOK = false;
+    if(typeof cloudAuto !== 'undefined' && cloudAuto && currentAccount && cloudAuto.id===currentAccount.id){ cloudAuto.blocked=true; clearTimeout(cloudAuto.timer); cloudNotice('本地保存失败，同步已暂停；请立即导出备份。'); }
     if(!saveWarned){ saveWarned = true; toast((e && e.message && e.message.includes('另一标签页')) ? e.message : '浏览器存储空间不足，本次改动可能无法保存', 'error'); }
   }
 }
@@ -2391,8 +2419,10 @@ function mountCloudPanel(){
     const snapshot=JSON.stringify(state);
     if(!window.confirm('将当前本地学习数据上传云端？'+(row?'云端现有版本 '+row.version+' 将被替换。':'云端尚无记录。')+' 请确认已导出双方备份。')) return;
     bound(); if(JSON.stringify(state)!==snapshot) throw Error('本地数据已变化，请重新操作。');
+    if(cloudAuto && (!storageOK || cloudAuto.localSnapshot!==snapshot || localStorage.getItem(stateKeyFor(localId))!==snapshot)) throw Error('本地数据未安全保存或已被另一标签页修改，请先导出备份。');
     const written=await cloud.writeState(JSON.parse(snapshot), row ? row.version : null); bound();
-    if(cloudAuto && cloudAuto.id===localId){ cloudAuto.version=written.version; cloudAuto.cleanSnapshot=snapshot; cloudAuto.dirty=JSON.stringify(state)!==snapshot; cloudAuto.blocked=false; cloudAuto.manualPaused=false; cloudStoreMeta(cloudAuto); if(cloudAuto.dirty) markCloudDirty(); }
+    if(cloudAuto && (cloudAuto.localSnapshot!==localStorage.getItem(stateKeyFor(localId)) || JSON.stringify(state)!==snapshot)){ cloudAuto.manualPaused=false; cloudAuto.blocked=true; throw Error('上传期间本地数据发生变化；请先导出备份，再处理同步冲突。'); }
+    if(cloudAuto && cloudAuto.id===localId){ cloudAuto.version=written.version; cloudAuto.cleanHash=window.YingyanHash.sha256(snapshot); cloudAuto.dirty=JSON.stringify(state)!==snapshot; cloudAuto.blocked=false; cloudAuto.manualPaused=false; if(!cloudStoreMeta(cloudAuto)) throw Error('云端已写入，但本地同步标记保存失败；请导出备份并暂停操作。'); if(cloudAuto.dirty) markCloudDirty(); }
     status('上传成功；建议继续保留本地备份。');
   });
   el('cloudDownload').onclick = () => run(async function(){
@@ -2411,7 +2441,7 @@ function mountCloudPanel(){
     // Persist first; never replace the in-memory state if storage is unavailable.
     try { localStorage.setItem(stateKeyFor(localId),JSON.stringify(restored)); } catch(e){ throw Error('本地保存失败，原数据未替换。'); }
     state=restored;
-    if(cloudAuto && cloudAuto.id===localId){ cloudAuto.version=row.version; cloudAuto.cleanSnapshot=null; cloudAuto.dirty=true; cloudAuto.blocked=false; cloudAuto.manualPaused=false; cloudAuto.localSnapshot=localStorage.getItem(stateKeyFor(localId)); cloudStoreMeta(cloudAuto); markCloudDirty(); }
+    if(cloudAuto && cloudAuto.id===localId){ cloudAuto.version=row.version; cloudAuto.cleanHash=null; cloudAuto.dirty=true; cloudAuto.blocked=false; cloudAuto.manualPaused=false; cloudAuto.localSnapshot=localStorage.getItem(stateKeyFor(localId)); if(!cloudStoreMeta(cloudAuto) || !markCloudDirty()) throw Error('云端数据已下载，但同步标记保存失败；请立即导出备份。'); }
     resetUiForAccount(); closeModal(); render(); toast('已下载云端数据；本地恢复副本已保留','success');
   });
 }

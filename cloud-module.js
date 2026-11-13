@@ -26,7 +26,7 @@
     return u.origin;
   }
   async function request(path, options, auth) {
-    if (global.navigator && global.navigator.onLine === false) throw Error('当前离线，云操作不可用；本地学习和备份不受影响。');
+    if (global.navigator && global.navigator.onLine === false) { const error=Error('当前离线，云操作不可用；本地学习和备份不受影响。'); error.network=true; throw error; }
     const c = config(), origin = base();
     const headers = { apikey: c.key, 'Content-Type': 'application/json' };
     if (auth) {
@@ -37,7 +37,7 @@
     }
     let response;
     try { response = await fetch(origin + path, Object.assign({ headers: headers, cache: 'no-store' }, options || {})); }
-    catch (_) { throw Error('无法连接云服务，请检查网络；本地数据未更改。'); }
+    catch (_) { const error=Error('无法连接云服务，请检查网络；本地数据未更改。'); error.network=true; throw error; }
     let body = null; try { body = await response.json(); } catch (_) {}
     if (!response.ok) { const error = Error((body && (body.msg || body.message || body.error_description)) || ('云请求失败 (' + response.status + ')')); error.code = body && body.code; throw error; }
     return body;
