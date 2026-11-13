@@ -15,9 +15,15 @@
       function fail() { if (!settled) { settled = true; reject(new Error('Recovery storage unavailable')); } }
       try {
         if (!global.indexedDB || typeof global.indexedDB.open !== 'function') return fail();
-        request = global.indexedDB.open(DB, 1);
-        request.onupgradeneeded = function () {
-          try { request.result.createObjectStore(STORE, { keyPath: 'id', autoIncrement: true }); }
+        request = global.indexedDB.open(DB, 3);
+        request.onupgradeneeded = function (event) {
+          try {
+            var store = event.oldVersion < 1
+              ? request.result.createObjectStore(STORE, { keyPath: 'id', autoIncrement: true })
+              : request.transaction.objectStore(STORE);
+            if (!store.indexNames.contains('accountId')) store.createIndex('accountId', 'accountId', { unique: false });
+            if (!store.indexNames.contains('accountId_id')) store.createIndex('accountId_id', ['accountId', 'id'], { unique: true });
+          }
           catch (_) { try { request.transaction.abort(); } catch (_) {} fail(); }
         };
         request.onerror = fail;
@@ -58,7 +64,7 @@
       var id = await transact(db, 'readwrite', function (store) {
         return store.add({ accountId: accountId, serialized: serialized, createdAt: Date.now() });
       });
-      var copy = await transact(db, 'readonly', function (store) { return store.get(id); });
+      var copy = await transact(db, 'readonly', function (store) { return store.index('accountId_id').get([accountId, id]); });
       if (!copy || copy.id !== id || copy.accountId !== accountId || copy.serialized !== serialized) throw new Error('Recovery verification failed');
       return id;
     });
@@ -66,8 +72,8 @@
   async function list(accountId) {
     validAccount(accountId);
     return withDB(async function (db) {
-      var copies = await transact(db, 'readonly', function (store) { return store.getAll(); });
-      return copies.filter(function (copy) { return copy && copy.accountId === accountId; }).map(function (copy) {
+      var copies = await transact(db, 'readonly', function (store) { return store.index('accountId').getAll(accountId); });
+      return copies.map(function (copy) {
         return { id: copy.id, createdAt: copy.createdAt };
       });
     });
@@ -75,7 +81,7 @@
   async function read(accountId, id) {
     validAccount(accountId); validId(id);
     return withDB(async function (db) {
-      var copy = await transact(db, 'readonly', function (store) { return store.get(id); });
+      var copy = await transact(db, 'readonly', function (store) { return store.index('accountId_id').get([accountId, id]); });
       return copy && copy.accountId === accountId ? copy.serialized : null;
     });
   }
