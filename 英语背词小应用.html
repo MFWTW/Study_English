@@ -985,12 +985,24 @@ kbd{font-family:var(--sans);font-size:9.5px;padding:2px 5px;border:1px solid #dc
 <script src="reading-module.js"></script>
 <script src="sentence-module.js"></script>
 <script src="translation-module.js"></script>
+<!-- Configure window.YINGYAN_CLOUD_CONFIG before cloud-module.js with the exact
+     project URL and, only after deployment, the verified CAS RPC name. -->
+<script src="cloud-config.js"></script>
+<script src="cloud-module.js"></script>
 <script>
 /* ============================================================
    词研 · 英语背词
    A self-contained offline vocabulary trainer.
    ============================================================ */
 "use strict";
+
+// Verification links may return tokens in the URL fragment. This app asks the
+// user to sign in explicitly, so discard those unused tokens without logging.
+try {
+  if (window.location && /(?:^#|&)access_token=/.test(window.location.hash || '') && window.history && window.history.replaceState) {
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
+} catch (_) { /* A locked-down browser can still use the login page. */ }
 
 /* ---------- icons ---------- */
 const ICONS = {
@@ -1213,7 +1225,7 @@ function resetUiForAccount(){
 }
 function enterAccount(account){
   currentAccount = account;
-  try{ sessionStorage.setItem(SESSION_ACCOUNT_KEY, account.id); }catch(e){}
+  try{ if(account.cloudIdentity) sessionStorage.removeItem(SESSION_ACCOUNT_KEY); else sessionStorage.setItem(SESSION_ACCOUNT_KEY, account.id); }catch(e){}
   loadState();
   resetUiForAccount();
   const auth = document.getElementById('authScreen');
@@ -1236,19 +1248,21 @@ function logoutAccount(){
     if(!ok) return;
     closeModal();
     try{ sessionStorage.removeItem(SESSION_ACCOUNT_KEY); }catch(e){}
+    if(cloudAuto){ clearTimeout(cloudAuto.timer); clearInterval(cloudAuto.visitTimer); if(cloudAuto.onVisible) document.removeEventListener('visibilitychange',cloudAuto.onVisible); cloudAuto=null; }
+    if(window.YingyanCloud) window.YingyanCloud.signOut();
     currentAccount = null;
     state = null;
+    authBusy = false;
     resetUiForAccount();
     closeModal();
     document.body.classList.add('auth-open');
-    authMode = accounts.length ? 'login' : 'register';
+    authMode = 'cloud';
     authSelectedId = accounts[0] ? accounts[0].id : null;
     renderAuth();
     toast('已退出账号');
   });
 }
 function renderAuth(){
-  if(!accounts.length) authMode = 'register';
   if(authMode==='login' && !accounts.length) authMode = 'register';
   let selected = accounts.find(function(a){ return a.id===authSelectedId; }) || accounts[0] || null;
   if(selected) authSelectedId = selected.id;
@@ -1262,7 +1276,14 @@ function renderAuth(){
     '</button>';
   }).join('')+'</div>' : '';
   let card = '';
-  if(authMode==='register'){
+  if(authMode==='cloud'){
+    card = '<div class="auth-head"><div class="kicker">Cloud Login</div><h2>登录云账号</h2><p>使用云端邮箱和密码登录，无需创建本地账号。</p></div>'+warning+
+      '<form class="auth-form" id="authForm"><div class="field"><label for="authCloudEmail">邮箱</label><input class="input" id="authCloudEmail" type="email" autocomplete="email" required></div><div class="field"><label for="authCloudPassword">云密码</label><input class="input" id="authCloudPassword" type="password" autocomplete="current-password" required></div><div class="auth-error" id="authError"></div><button class="btn btn-primary auth-submit" id="authSubmit" type="submit">云登录</button></form>'+
+      '<div class="auth-switch"><button type="button" data-auth-switch="cloud-register">注册云账号</button> · <button type="button" data-auth-switch="'+(accounts.length?'login':'register')+'">使用本地账号 / 备份迁移</button></div><div class="auth-note">云账号在本机使用独立工作区，不会自动覆盖现有本地账号。</div>';
+  }else if(authMode==='cloud-register'){
+    card = '<div class="auth-head"><h2>注册云账号</h2><p>验证邮箱后即可登录；用户名不能重复。</p></div>'+warning+
+      '<form class="auth-form" id="authForm"><div class="field"><label for="authCloudUsername">用户名（1–20 字符）</label><input class="input" id="authCloudUsername" maxlength="20" required></div><div class="field"><label for="authCloudEmail">邮箱</label><input class="input" id="authCloudEmail" type="email" autocomplete="email" required></div><div class="field"><label for="authCloudPassword">密码</label><input class="input" id="authCloudPassword" type="password" autocomplete="new-password" minlength="8" required></div><div class="auth-error" id="authError"></div><button class="btn btn-primary auth-submit" id="authSubmit" type="submit">注册</button></form><div class="auth-note">账号长期未打开网站可能被删除，请定期导出备份。</div>';
+  }else if(authMode==='register'){
     card = '<div class="auth-head"><div class="kicker">Create Account</div><h2>创建学习账号</h2><p>每个账号拥有独立的词库、错题本和学习记录。</p></div>'+
       warning+legacyNote+
       '<form class="auth-form" id="authForm" autocomplete="off">'+
@@ -1287,6 +1308,7 @@ function renderAuth(){
       '<div class="auth-switch">还没有账号？<button type="button" data-auth-switch="register">创建新账号</button></div>'+
       '<div class="auth-note"><b>账号独立：</b>每个账号的词库、错题和学习记录互不影响。账号与记录仅保存在当前浏览器；忘记密码无法找回该账号数据。</div>';
   }
+  if(authMode!=='cloud') card += '<div class="auth-switch"><button type="button" data-auth-switch="cloud">返回云账号登录</button></div>';
   const root = document.getElementById('authScreen');
   root.innerHTML = '<div class="auth-shell">'+
     '<aside class="auth-aside">'+
@@ -1312,14 +1334,115 @@ function renderAuth(){
     };
   });
   root.querySelectorAll('[data-auth-switch]').forEach(function(b){
-    b.onclick = function(){ authMode = b.dataset.authSwitch; authSelectedId = accounts[0]?accounts[0].id:null; renderAuth(); };
+    b.onclick = function(){ if(authBusy) return; authMode = b.dataset.authSwitch; authSelectedId = accounts[0]?accounts[0].id:null; renderAuth(); };
   });
   const form = document.getElementById('authForm');
-  if(form) form.onsubmit = function(e){ e.preventDefault(); if(authMode==='register') doRegister(); else doLogin(); };
+  if(form) form.onsubmit = function(e){ e.preventDefault(); if(authMode==='cloud') doCloudLogin(); else if(authMode==='cloud-register') doCloudRegister(); else if(authMode==='register') doRegister(); else doLogin(); };
   setTimeout(function(){
     const f = authMode==='register' ? document.getElementById('regName') : document.getElementById('loginPass');
     if(f) f.focus();
   },60);
+}
+// Cloud writes use an acknowledged server version, never a freshly fetched
+// version paired with stale local data. Local data remains the recovery copy.
+let cloudAuto = null;
+function cloudMetaKey(id){ return 'ciyan_cloud_sync_v1_'+id; }
+function cloudNotice(text){ if(cloudAuto) cloudAuto.status=text; const el=document.getElementById('cloudStatus'); if(el) el.textContent=text; const badge=document.getElementById('cloudSyncBadge'); if(badge) badge.textContent=text; }
+function cloudStoreMeta(c){
+  try { localStorage.setItem(cloudMetaKey(c.id), JSON.stringify({version:c.version,dirty:c.dirty,cleanSnapshot:c.cleanSnapshot || null})); return true; }
+  catch(e){ c.blocked=true; cloudNotice('同步暂停：无法保存本地同步状态，请导出备份。'); return false; }
+}
+function markCloudDirty(){
+  const c=cloudAuto;
+  if(!c || !currentAccount || currentAccount.id!==c.id) return true;
+  c.dirty=true;
+  if(!cloudStoreMeta(c)) return false;
+  if(!c.blocked){
+    cloudNotice('本地有更改，等待云端同步…');
+    clearTimeout(c.timer); c.timer=setTimeout(function(){ flushCloud(c); },1500);
+  }
+  return true;
+}
+async function flushCloud(c){
+  if(c!==cloudAuto || c.blocked || c.running || !c.dirty || !currentAccount || currentAccount.id!==c.id) return;
+  if(c.localSnapshot!==localStorage.getItem(stateKeyFor(c.id))){ c.blocked=true; cloudNotice('另一标签页修改了本机数据，同步已暂停；请导出备份。'); toast('检测到其他标签页修改，同步已暂停。','error'); return; }
+  c.running=true; const snapshot=JSON.stringify(state); cloudNotice('正在同步…');
+  try {
+    const result=await window.YingyanCloud.writeState(JSON.parse(snapshot),c.version);
+    if(c!==cloudAuto) return;
+    if(c.localSnapshot!==localStorage.getItem(stateKeyFor(c.id))){ c.blocked=true; cloudNotice('另一标签页修改了本机数据，同步已暂停，请先备份。'); toast('检测到其他标签页修改，请先导出备份。','error'); return; }
+    c.version=result.version; c.dirty=JSON.stringify(state)!==snapshot;
+    c.cleanSnapshot=snapshot;
+    if(!cloudStoreMeta(c)) return;
+    cloudNotice(c.dirty?'本地有新更改，继续同步…':'已同步到云端');
+  } catch(e) {
+    if(c!==cloudAuto) return;
+    c.blocked=true; cloudStoreMeta(c);
+    cloudNotice('同步失败或版本冲突：本地数据已保留，请先导出备份，再在设置中处理。');
+    toast('云同步失败或发生冲突，本地数据已保留，请检查设置。','error');
+  } finally {
+    c.running=false;
+    if(c===cloudAuto && c.dirty && !c.blocked){ clearTimeout(c.timer); c.timer=setTimeout(function(){flushCloud(c);},1500); }
+  }
+}
+function beginCloudSync(id, serverVersion, hadLocal){
+  let saved=null;
+  try { saved=JSON.parse(localStorage.getItem(cloudMetaKey(id)) || 'null'); } catch(e) {}
+  const localSnapshot=localStorage.getItem(stateKeyFor(id));
+  const compatible=hadLocal && saved && Number.isSafeInteger(saved.version) && saved.version===serverVersion && (saved.dirty===true || (typeof saved.cleanSnapshot==='string' && saved.cleanSnapshot===localSnapshot));
+  cloudAuto={id:id,version:hadLocal ? (saved && Number.isSafeInteger(saved.version) ? saved.version : null) : serverVersion,cleanSnapshot:hadLocal && saved ? saved.cleanSnapshot : null,dirty:!hadLocal || !!(saved && saved.dirty),blocked:!!hadLocal && !compatible,running:false,timer:null,status:'云账号 · 已连接',localSnapshot:localSnapshot};
+  const c=cloudAuto;
+  c.onVisible=function(){
+    if(c!==cloudAuto || document.visibilityState==='hidden') return;
+    window.YingyanCloud.visit().catch(function(){ if(c===cloudAuto) cloudNotice('访问记录更新失败，请检查网络。'); });
+  };
+  c.visitTimer=setInterval(c.onVisible,6*60*60*1000);
+  document.addEventListener('visibilitychange',c.onVisible);
+  if(cloudAuto.blocked){ cloudNotice('云端和本机版本不一致，同步已暂停'); toast('云端与本机版本无法确认一致，已暂停同步；请先备份并在设置中选择。','error'); return; }
+  cloudNotice(cloudAuto.dirty?'本地已保存，等待云端同步…':'已同步到云端');
+  if(cloudStoreMeta(cloudAuto) && cloudAuto.dirty) cloudAuto.timer=setTimeout(function(){if(cloudAuto) flushCloud(cloudAuto);},1500);
+}
+async function doCloudRegister(){
+  if(authBusy) return;
+  const cloud=window.YingyanCloud, email=document.getElementById('authCloudEmail').value.trim(), password=document.getElementById('authCloudPassword').value, username=document.getElementById('authCloudUsername').value.trim();
+  if(!cloud){ authError('云模块不可用。'); return; }
+  authBusy=true; const btn=document.getElementById('authSubmit'); btn.disabled=true;
+  try { await cloud.signUp(email,password,username); authBusy=false; authMode='cloud'; renderAuth(); toast('注册请求已提交，请查收验证邮件；验证后登录。'); }
+  catch(e){ authBusy=false; btn.disabled=false; authError('注册失败：'+(e.message||'未知错误')); }
+}
+async function doCloudLogin(){
+  if(authBusy) return;
+  const cloud=window.YingyanCloud, email=(document.getElementById('authCloudEmail').value||'').trim(), password=document.getElementById('authCloudPassword').value;
+  if(!cloud){ authError('云模块不可用，请检查网络和配置。'); return; }
+  if(!email || !password){ authError('请输入邮箱和密码。'); return; }
+  authBusy=true; const btn=document.getElementById('authSubmit'); btn.disabled=true; btn.textContent='登录中…';
+  try {
+    const user=await cloud.signIn(email,password);
+    const row=await cloud.readState();
+    // A project/user-specific workspace cannot collide with any local account.
+    const id='cloud_'+encodeURIComponent(user.origin)+'_'+encodeURIComponent(user.id);
+    const key=stateKeyFor(id), existing=localStorage.getItem(key);
+    if(existing!==null){
+      let cached; try { cached=JSON.parse(existing); } catch(e) {}
+      if(!cached || !Array.isArray(cached.libraries) || !cached.libraries.length) throw Error('本机云账号工作区数据无效，已保留原数据，请先备份并修复。');
+    }
+    if(existing===null && row && row.data && Object.keys(row.data).length){
+      if(!Array.isArray(row.data.libraries) || !row.data.libraries.length) throw Error('云端数据格式无效，未修改本地数据。');
+      const initial=JSON.stringify(normalizeState(row.data));
+      localStorage.setItem(key,initial);
+      if(localStorage.getItem(key)!==initial) throw Error('本地工作区保存失败。');
+    }
+    authBusy=false;
+    enterAccount({id:id,username:user.username,cloudIdentity:user});
+    if(!row || !Number.isSafeInteger(row.version)) throw Error('云端版本不可用，未开启自动同步。');
+    beginCloudSync(id,row.version,existing!==null);
+  } catch(e) {
+    cloud.signOut(); authBusy=false; currentAccount=null; state=null;
+    document.body.classList.add('auth-open');
+    if(!document.querySelector('.auth-shell')) renderAuth();
+    const b=document.getElementById('authSubmit'); if(b){ b.disabled=false; b.textContent='云登录'; }
+    authError('云登录失败：'+(e.message||'未知错误'));
+  }
 }
 async function doLogin(){
   if(authBusy) return;
@@ -1341,6 +1464,7 @@ async function doLogin(){
     }
     acc.lastLogin = Date.now();
     saveAccounts();
+    authBusy = false;
     enterAccount(acc);
   }catch(e){
     console.error(e);
@@ -1545,11 +1669,20 @@ function saveState(){
   if(!currentAccount) return;
   try{
     state.lastSavedAt = Date.now();
-    localStorage.setItem(stateKeyFor(currentAccount.id), JSON.stringify(state));
+    const serialized=JSON.stringify(state);
+    if(typeof cloudAuto !== 'undefined' && cloudAuto && cloudAuto.id===currentAccount.id && cloudAuto.localSnapshot!==localStorage.getItem(stateKeyFor(currentAccount.id))){
+      cloudAuto.blocked=true;
+      try { localStorage.setItem('ciyan_conflict_recovery_'+currentAccount.id+'_'+Date.now(),serialized); } catch(e) {}
+      throw Error('另一标签页已更改本地数据，已停止保存；请导出本页备份。');
+    }
+    // Mark dirty first: a crash after the state write must not leave a clean marker.
+    if(typeof cloudAuto !== 'undefined' && cloudAuto && cloudAuto.id===currentAccount.id && !markCloudDirty()) throw Error('无法记录同步状态，请导出备份。');
+    localStorage.setItem(stateKeyFor(currentAccount.id), serialized);
+    if(typeof cloudAuto !== 'undefined' && cloudAuto && cloudAuto.id===currentAccount.id) cloudAuto.localSnapshot=serialized;
     storageOK = true;
   }catch(e){
     storageOK = false;
-    if(!saveWarned){ saveWarned = true; toast('浏览器存储空间不足，本次改动可能无法保存', 'error'); }
+    if(!saveWarned){ saveWarned = true; toast((e && e.message && e.message.includes('另一标签页')) ? e.message : '浏览器存储空间不足，本次改动可能无法保存', 'error'); }
   }
 }
 function ensureDaily(){
@@ -1905,7 +2038,7 @@ function renderShell(){
     const initial = esc(accountInitial(currentAccount.username));
     const name = esc(currentAccount.username);
     document.getElementById('accountMini').innerHTML =
-      '<div class="avatar">'+initial+'</div><div class="info"><b>'+name+'</b><span>本地独立账号</span></div>'+
+      '<div class="avatar">'+initial+'</div><div class="info"><b>'+name+'</b><span '+(currentAccount.cloudIdentity?'id="cloudSyncBadge" role="status"':'')+'>'+(currentAccount.cloudIdentity?esc((typeof cloudAuto!=='undefined' && cloudAuto && cloudAuto.status)||'云账号 · 正在检查同步'):'本地独立账号')+'</span></div>'+
       '<button class="icon-btn sm" data-action="logout" title="退出登录" aria-label="退出登录">'+icon('logout',15)+'</button>';
     document.getElementById('accountPill').innerHTML =
       '<span class="avatar">'+initial+'</span><b>'+name+'</b><span class="chev">'+icon('chevronRight',12)+'</span>';
@@ -2205,6 +2338,84 @@ function openLibraryDialog(edit){
   dlg.querySelectorAll('[data-close]').forEach(function(b){ b.onclick=closeModal; });
 }
 
+/* ---------- optional cloud account ---------- */
+function mountCloudPanel(){
+  const panel = document.getElementById('cloudPanel');
+  const cloud = window.YingyanCloud;
+  if(!panel || !cloud){ if(panel) panel.textContent='云模块不可用，本地功能仍可使用。'; return; }
+  const directIdentity = currentAccount.cloudIdentity || null;
+  if(!directIdentity) cloud.signOut();
+  const localId = currentAccount.id;
+  let identity = directIdentity, busy = false;
+  panel.innerHTML = '<div class="field"><label for="cloudEmail">邮箱</label><input class="input" id="cloudEmail" type="email" autocomplete="email"></div><div class="field"><label for="cloudPassword">云密码</label><input class="input" id="cloudPassword" type="password" autocomplete="current-password"></div><div class="field"><label for="cloudUsername">用户名（仅注册）</label><input class="input" id="cloudUsername" maxlength="40" autocomplete="username"></div><p class="hint" id="cloudStatus" role="status">尚未登录云账号；离线时不可使用云功能。</p><div class="settings-actions"><button class="btn btn-ghost btn-sm" id="cloudRegister">注册</button><button class="btn btn-ghost btn-sm" id="cloudLogin">云登录</button><button class="btn btn-ghost btn-sm" id="cloudLogout">云退出</button><button class="btn btn-ghost btn-sm" id="cloudUpload">上传本地</button><button class="btn btn-ghost btn-sm" id="cloudDownload">下载云端</button></div>';
+  const el = id => panel.querySelector('#'+id);
+  const status = text => { el('cloudStatus').textContent = text; };
+  if(directIdentity){
+    ['cloudEmail','cloudPassword','cloudUsername','cloudRegister','cloudLogin','cloudLogout'].forEach(function(id){ el(id).closest('.field') ? el(id).closest('.field').style.display='none' : el(id).style.display='none'; });
+    status((cloudAuto && cloudAuto.status) || '已连接云账号。');
+  }
+  function valid(){ if(!currentAccount || currentAccount.id !== localId || !panel.isConnected) throw Error('本地账号或页面已改变，请重新操作。'); }
+  function bound(){ valid(); if(!identity) throw Error('请先登录云账号。'); }
+  async function run(fn){
+    if(busy) return; busy=true;
+    const c=cloudAuto, wasBlocked=c && c.blocked;
+    try { await fn(); } catch(e){ status(e.message || '云操作失败，本地数据未更改。'); }
+    finally {
+      if(c && c===cloudAuto && c.manualPaused){ c.manualPaused=false; c.blocked=wasBlocked; if(c.dirty && !c.blocked) markCloudDirty(); }
+      busy=false;
+    }
+  }
+  el('cloudRegister').onclick = () => run(async function(){
+    await cloud.signUp(el('cloudEmail').value.trim(), el('cloudPassword').value, el('cloudUsername').value);
+    el('cloudPassword').value=''; status('注册请求已提交。如需邮箱验证，请验证后登录；用户名唯一性由服务器保证。');
+  });
+  el('cloudLogin').onclick = () => run(async function(){
+    valid(); identity=null;
+    const user = await cloud.signIn(el('cloudEmail').value.trim(), el('cloudPassword').value);
+    el('cloudPassword').value=''; valid();
+    const key = 'ciyan_cloud_binding_v1_'+localId;
+    const value = JSON.stringify({origin:user.origin,id:user.id});
+    let old; try { old=localStorage.getItem(key); } catch(e){ cloud.signOut(); throw Error('无法读取本地账号绑定，已取消登录。'); }
+    if(old && old!==value){ cloud.signOut(); throw Error('此本地账号已绑定其他云账号或项目；请使用对应本地账号，防止数据串用。'); }
+    if(!old){
+      if(!window.confirm('将当前本地账号与云用户「'+user.username+'」绑定？绑定后不能切换为其他云账号。请先导出本地备份。')){ cloud.signOut(); return; }
+      try { localStorage.setItem(key,value); if(localStorage.getItem(key)!==value) throw Error(); } catch(e){ cloud.signOut(); throw Error('无法保存账号绑定，已取消登录。'); }
+    }
+    identity=user; status('已登录云用户 '+user.username+'；不会自动同步。');
+  });
+  el('cloudLogout').onclick = function(){ cloud.signOut(); identity=null; el('cloudPassword').value=''; status('已退出云账号；本地数据未更改。'); };
+  el('cloudUpload').onclick = () => run(async function(){
+    bound(); if(cloudAuto && cloudAuto.running) throw Error('自动同步正在进行，请稍后再试。');
+    if(cloudAuto){ clearTimeout(cloudAuto.timer); cloudAuto.blocked=true; cloudAuto.manualPaused=true; }
+    const row=await cloud.readState(); bound();
+    const snapshot=JSON.stringify(state);
+    if(!window.confirm('将当前本地学习数据上传云端？'+(row?'云端现有版本 '+row.version+' 将被替换。':'云端尚无记录。')+' 请确认已导出双方备份。')) return;
+    bound(); if(JSON.stringify(state)!==snapshot) throw Error('本地数据已变化，请重新操作。');
+    const written=await cloud.writeState(JSON.parse(snapshot), row ? row.version : null); bound();
+    if(cloudAuto && cloudAuto.id===localId){ cloudAuto.version=written.version; cloudAuto.cleanSnapshot=snapshot; cloudAuto.dirty=JSON.stringify(state)!==snapshot; cloudAuto.blocked=false; cloudAuto.manualPaused=false; cloudStoreMeta(cloudAuto); if(cloudAuto.dirty) markCloudDirty(); }
+    status('上传成功；建议继续保留本地备份。');
+  });
+  el('cloudDownload').onclick = () => run(async function(){
+    bound(); if(cloudAuto && cloudAuto.running) throw Error('自动同步正在进行，请稍后再试。');
+    if(cloudAuto){ clearTimeout(cloudAuto.timer); cloudAuto.blocked=true; cloudAuto.manualPaused=true; }
+    const before=JSON.stringify(state); const row=await cloud.readState(); bound();
+    if(!row) throw Error('云端没有学习数据，本地未更改。');
+    if(!row.data || !Array.isArray(row.data.libraries) || !row.data.libraries.length) throw Error('云端数据格式无效，本地未更改。');
+    if(JSON.stringify(state)!==before) throw Error('本地数据已变化，请重新操作。');
+    if(!window.confirm('下载云端版本 '+row.version+' 将替换当前本地数据。请先导出本地备份；继续前会另存一份本地恢复副本。')) return;
+    bound(); if(JSON.stringify(state)!==before) throw Error('本地数据已变化，请重新操作。');
+    if(cloudAuto && cloudAuto.id===localId && cloudAuto.localSnapshot!==localStorage.getItem(stateKeyFor(localId))) throw Error('另一标签页已更新本地数据，请先导出备份。');
+    const backupKey='ciyan_cloud_recovery_v1_'+localId+'_'+Date.now()+'_'+Math.random().toString(36).slice(2);
+    try { localStorage.setItem(backupKey,before); if(localStorage.getItem(backupKey)!==before) throw Error(); } catch(e){ throw Error('无法保存恢复副本，已取消下载。请先导出备份。'); }
+    const restored=normalizeState(row.data); restored.firstRun=false;
+    // Persist first; never replace the in-memory state if storage is unavailable.
+    try { localStorage.setItem(stateKeyFor(localId),JSON.stringify(restored)); } catch(e){ throw Error('本地保存失败，原数据未替换。'); }
+    state=restored;
+    if(cloudAuto && cloudAuto.id===localId){ cloudAuto.version=row.version; cloudAuto.cleanSnapshot=null; cloudAuto.dirty=true; cloudAuto.blocked=false; cloudAuto.manualPaused=false; cloudAuto.localSnapshot=localStorage.getItem(stateKeyFor(localId)); cloudStoreMeta(cloudAuto); markCloudDirty(); }
+    resetUiForAccount(); closeModal(); render(); toast('已下载云端数据；本地恢复副本已保留','success');
+  });
+}
+
 /* ---------- settings ---------- */
 function openSettings(){
   clearTimeout(ui.autoNextTimer);
@@ -2221,6 +2432,7 @@ function openSettings(){
       '<label class="check-row" style="margin-top:10px"><input type="checkbox" id="setAutoNext" '+(state.settings.autoNext?'checked':'')+'> 答题后自动进入下一题（答错会多停留一会儿）</label>'+
       '<label class="check-row" style="margin-top:8px"><input type="checkbox" id="setShuffle" '+(state.settings.shuffle?'checked':'')+'> 每轮练习随机打乱词序（默认关闭，按词库顺序出题）</label>'+
       '<div class="settings-section"><h3>DeepSeek 模型</h3><div class="field"><label for="setApiKey">API Key（仅保存在当前标签页，不写入备份）</label><input class="input" id="setApiKey" type="password" autocomplete="off" placeholder="输入 DeepSeek API Key"></div><p class="hint">模型功能会将所选文章、学习记录或答案发送至 DeepSeek，可能产生费用；请勿输入敏感信息。关闭标签页后需重新输入。浏览器直连可能受网络或跨域策略限制。</p></div>'+
+      '<div class="settings-section"><h3>云账号与同步</h3><p class="hint">云账号登录后自动同步；发生版本冲突时暂停，需先导出备份并手动选择。旧本地账号可在此登录云账号并迁移。本地账号不能保护共享设备上的隐私。</p><div id="cloudPanel"></div></div>'+
       '<div class="settings-section"><h3>数据备份</h3><p class="hint" style="margin-bottom:9px">记录保存在当前浏览器。换文件位置、从聊天窗口或压缩包预览、无痕模式、清理站点数据或换设备，都可能导致读不到记录；建议定期导出 JSON 备份。</p><div class="settings-actions"><button class="btn btn-ghost btn-sm" id="exportBackup">'+icon('download',14)+'导出备份</button><button class="btn btn-ghost btn-sm" id="importBackupBtn">'+icon('upload',14)+'恢复备份</button><input type="file" id="backupFile" accept=".json,application/json" hidden></div></div>'+
       '<div class="settings-section"><h3>数据概览</h3><div class="row wrap" style="gap:6px"><span class="badge badge-gray">'+state.libraries.length+' 个词库</span><span class="badge badge-gray">'+state.libraries.reduce(function(n,l){return n+l.words.length;},0)+' 个词</span><span class="badge badge-gray">'+state.errorBook.length+' 条错题记录</span><span class="badge badge-gray">'+state.sessions.length+' 次练习</span></div>'+
         '<div class="danger-zone"><b>清空当前账号数据</b><p>会删除当前账号的所有词库、学习记录、薄弱标记与错题本；其他账号不受影响，且无法恢复。</p><button class="btn btn-danger-ghost btn-sm" id="resetAll">'+icon('trash',14)+'清空当前账号</button></div>'+
@@ -2228,6 +2440,7 @@ function openSettings(){
     '</div>'+
     '<div class="modal-foot"><span class="left-note">'+(storageOK?'本地存储正常':'本地存储不可用，请及时备份')+(state.lastSavedAt?' · 上次保存 '+esc(fmtDateTime(state.lastSavedAt)):'')+'</span><button class="btn btn-ghost" data-close>关闭</button><button class="btn btn-primary" id="saveSettings">'+icon('check',15)+'保存设置</button></div>';
   dlg.showModal();
+  mountCloudPanel();
   try{ document.getElementById('setApiKey').value = sessionStorage.getItem('ciyan_deepseek_key_'+currentAccount.id) || ''; }catch(e){}
   dlg.querySelectorAll('[data-close]').forEach(function(b){ b.onclick=closeModal; });
   document.getElementById('saveSettings').onclick = function(){
@@ -3692,7 +3905,7 @@ const autoAccount = accounts.find(function(a){ return a.id===sessionAccountId; }
 if(autoAccount){
   enterAccount(autoAccount);
 }else{
-  authMode = accounts.length ? 'login' : 'register';
+  authMode = 'cloud';
   authSelectedId = accounts[0] ? accounts[0].id : null;
   document.body.classList.add('auth-open');
   renderAuth();
