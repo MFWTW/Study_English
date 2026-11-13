@@ -27,7 +27,7 @@ jobs:
       - name: Stage site
         run: |
           mkdir -p _site
-          cp -R index.html manifest.webmanifest cloud-config.js cloud-hash.js cloud-module.js reading-module.js sentence-module.js \
+          cp -R index.html manifest.webmanifest cloud-config.js cloud-hash.js cloud-recovery.js cloud-module.js reading-module.js sentence-module.js \
                 translation-module.js service-worker.js icons "英语背词小应用.html" _site/
 
       - name: Configure Pages

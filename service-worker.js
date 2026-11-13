@@ -1,10 +1,10 @@
 /* Offline shell only. Change VERSION whenever any listed file changes. */
 'use strict';
-const VERSION = '0.5.1';
+const VERSION = '0.5.2';
 const PREFIX = 'yingyan-static:' + encodeURIComponent(self.registration.scope) + ':';
 const CACHE = PREFIX + VERSION;
 const FILES = [
-  '英语背词小应用.html', 'cloud-config.js', 'cloud-hash.js', 'cloud-module.js', 'reading-module.js', 'sentence-module.js',
+  '英语背词小应用.html', 'cloud-config.js', 'cloud-hash.js', 'cloud-recovery.js', 'cloud-module.js', 'reading-module.js', 'sentence-module.js',
   'translation-module.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'
 ];
