@@ -2145,6 +2145,7 @@ const ui = {
   wordFilter:'all',
   wordPage:1,
   wordPageSize:12,
+  errorMode:'mixed',
   errorFilter:'open',
   errorSearch:'',
   errorIndex:0,
@@ -3735,7 +3736,7 @@ function allErrorWords(){
   return out;
 }
 function startAllErrors(){
-  const libId = '__error_book__', scope = 'errors', mode = 'mixed';
+  const libId = '__error_book__', scope = 'errors', mode = ui.errorMode || 'mixed';
   const words = poolFor(scope, libId);
   if(!words.length){ toast('当前没有待攻克的错题','success'); return; }
   let round = quizRoundFor(libId, scope);
@@ -3818,6 +3819,9 @@ function renderErrors(){
     '</div>' :
     '<div class="empty"><div class="empty-icon">'+icon('errors',26)+'</div><h3>'+(q?'没有匹配的错题':ui.errorFilter==='mastered'?'还没有已掌握的错题':'还没有待攻克的错题')+'</h3><p>'+(q?'试试别的关键词，或切换筛选条件。':'刷题时答错的词会自动出现在这里。进度达到 5 点后移入「已掌握」。')+'</p><button class="btn btn-primary btn-sm" '+(open.length?'data-action="start-errors"':'data-action="go" data-page="quiz"')+'>'+icon(open.length?'refresh':'play',14)+(open.length?'开始错题重练':'去刷一组题')+'</button></div>';
   return '<div class="page-actions"><div class="left"><div class="page-intro">错题自动留存，不用手动抄。优先清「待攻克」，进度达到 5 点即可移入已掌握。</div></div><div class="right">'+(mastered.length?'<button class="btn btn-ghost" data-action="clear-mastered">'+icon('trash',15)+'清空已掌握</button>':'')+(open.length?'<button class="btn btn-primary" data-action="start-errors">'+icon('refresh',15)+'开始错题重练</button>':'')+'</div></div>'+
+    (open.length ? '<section class="card card-pad" style="margin-bottom:15px"><div class="field"><label>错题复习模式</label><div class="mode-grid" style="grid-template-columns:repeat(3,1fr);gap:9px">'+
+      [['en2cn','英 → 汉','看英文，选中文释义'],['cn2en','汉 → 英','看中文，拼写英文'],['mixed','混合训练','识别 + 输出交替']].map(function(m){return '<button class="mode-opt '+((ui.errorMode||'mixed')===m[0]?'active':'')+'" style="padding:13px 11px" data-action="error-mode" data-mode="'+m[0]+'" aria-pressed="'+((ui.errorMode||'mixed')===m[0])+'"><b style="font-size:13px">'+m[1]+'</b><span style="font-size:10.5px">'+m[2]+'</span></button>';}).join('')+
+    '</div></div></section>' : '')+
     '<div class="error-kpis">'+
       '<div class="card error-kpi"><div class="stat-icon red">'+icon('errors',17)+'</div><div><b>'+open.length+'</b><span>待攻克错题</span></div></div>'+
       '<div class="card error-kpi"><div class="stat-icon green">'+icon('check',17)+'</div><div><b>'+mastered.length+'</b><span>已掌握</span></div></div>'+
@@ -4070,6 +4074,10 @@ document.addEventListener('click', function(e){
   }
   if(action==='error-prev'){ moveErrorSlide(-1); return; }
   if(action==='error-next'){ moveErrorSlide(1); return; }
+  if(action==='error-mode'){
+    if(['en2cn','cn2en','mixed'].includes(el.dataset.mode)){ ui.errorMode = el.dataset.mode; render(); }
+    return;
+  }
   if(action==='start-errors'){ startAllErrors(); return; }
   if(action==='error-practice'){
     const w = findWord(id);

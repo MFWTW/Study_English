@@ -179,7 +179,7 @@
     selectedWord = word; wordResult = ''; const account = state, accountResearch = state.research, request = ++wordRequest;
     wordResult = '查询中…'; refreshWordPanel();
     try {
-      const result = await ask('请给出英文单词“' + word + '”的简洁中文释义，只返回释义。');
+      const result = await ask('请给出英文单词“' + word + '”的常见词性及简洁中文释义。每种词性分别标注英文缩写，如 n.、v.、adj.、adv.，并紧跟对应中文释义；有多种常见词性时分别列出。只返回词性和释义，不要其他说明。');
       if (account !== state || accountResearch !== state.research || request !== wordRequest) return;
       wordResult = result;
     } catch (e) { if (account !== state || accountResearch !== state.research || request !== wordRequest) return; wordResult = ''; toast('查词失败：' + (e && e.message || '未知错误'), 'error'); }
@@ -221,7 +221,7 @@
           if (nextTab === 'reading' && tab !== 'reading') { currentText = newReadingText; resetSelection(); }
           tab = nextTab; importRequest++; redraw(); break;
         }
-        case 'rd-load': { const input = document.getElementById('rd-input'); if (!input) break; const r = research(); importRequest++; currentText = input.value; newReadingText = currentText; draft = input.value; archive(r, currentText); resetSelection(); saveState(); redraw(); break; }
+        case 'rd-load': { const input = document.getElementById('rd-input'); if (!input) break; if (!input.value.trim()) { toast('请先输入文章', 'error'); break; } const r = research(); importRequest++; currentText = input.value; newReadingText = currentText; draft = input.value; archive(r, currentText); tab = 'detail'; resetSelection(); saveState(); redraw(); break; }
         case 'rd-open': { const r = research(); const item = r.readingHistory.find(function (entry) { return entry && entry.id === action.dataset.id && typeof entry.text === 'string'; }); if (!item || !confirmReplace(r)) break; importRequest++; currentText = item.text; draft = newReadingText; tab = 'detail'; resetSelection(); saveState(); redraw(); break; }
         case 'rd-delete': { const r = research(); const index = r.readingHistory.findIndex(function (entry) { return entry && entry.id === action.dataset.id; }); if (index < 0 || !window.confirm('确定删除这条历史阅读记录吗？')) break; r.readingHistory.splice(index, 1); saveState(); redraw(); break; }
         case 'rd-word': switchNotesTab('word'); lookup(action.dataset.word); break;
