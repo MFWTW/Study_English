@@ -980,6 +980,7 @@ kbd{font-family:var(--sans);font-size:9.5px;padding:2px 5px;border:1px solid #dc
 
 <dialog id="appModal" aria-live="polite"></dialog>
 <dialog id="welcomeModal" class="lg"></dialog>
+<dialog id="releaseNoticeModal" class="lg" aria-labelledby="releaseNoticeTitle"></dialog>
 <dialog id="confirmModal" class="sm"></dialog>
 
 <script src="reading-module.js"></script>
@@ -1239,7 +1240,8 @@ function enterAccount(account){
   closeModal();
   window.scrollTo({top:0,behavior:'auto'});
   render();
-  if(state.firstRun) setTimeout(function(){ if(state && state.firstRun) openWelcome(); }, 220);
+  if(state.firstRun) setTimeout(function(){ if(currentAccount===account && state && state.firstRun) openWelcome(); }, 220);
+  else showReleaseNotice(account);
   if(!storageOK) toast('本地存储不可用，账号和记录可能无法长期保存', 'error');
 }
 function logoutAccount(){
@@ -3913,6 +3915,12 @@ function renderGuide(){
         '</section>'+
       '</div>'+
       '<div class="stack" style="gap:17px">'+
+        '<section class="card guide-card"><h3>'+icon('guide',17)+'翻研：自选文章翻译</h3><div class="guide-list">'+
+          '<div class="guide-li"><span class="bullet"></span><div>在「翻研」的「自选文章练习」中选择中译英或英译汉，粘贴原文或上传 TXT、DOCX 文件，检查文字后点击「开始自选文章练习」。文件只提取文字，不保证保留格式。</div></div>'+
+          '<div class="guide-li"><span class="bullet"></span><div>填写自己的译文并提交，AI 会给出逐句反馈和参考译文；可修改并提交译文、将英文句子加入句研，或在历史翻译库中继续练习。AI 结果可能有误，请自行核对。</div></div>'+
+          '<div class="guide-li"><span class="bullet"></span><div>原有 AI 生成中译英练习仍在下方：可选词库、句研比例及参考文章。自选文章使用原文，不会先由 AI 改写。</div></div>'+
+          '<div class="guide-li"><span class="bullet"></span><div>提交反馈需要联网和有效的 DeepSeek API Key，原文与译文会发送给 AI 服务，请勿提交敏感或无权分享的内容。</div></div>'+
+        '</div></section>'+
         '<section class="card guide-card"><h3>'+icon('star',17)+'薄弱词与掌握度</h3><div class="lead">用两种方式标记薄弱词，系统会优先安排复习。</div><div class="guide-list">'+
           '<div class="guide-li"><span class="bullet"></span><div><b>手动星标：</b>词库列表或答题反馈里点星形按钮，随时标记或取消。</div></div>'+
           '<div class="guide-li"><span class="bullet"></span><div><b>自动标记：</b>同一个词累计答错 2 次，自动加入薄弱词，并在标签中提示。</div></div>'+
@@ -3946,6 +3954,34 @@ function renderGuide(){
     '</div>';
 }
 
+/* Release notice is deliberately separate from learning and cloud state. */
+const RELEASE_NOTICE_VERSION = '1.1.0';
+const dismissedReleaseNotices = new Set();
+function releaseNoticeKey(account){ return 'ciyan_release_notice_'+RELEASE_NOTICE_VERSION+'_'+encodeURIComponent(account.id); }
+function showReleaseNotice(account){
+  if(!account || currentAccount!==account) return;
+  const key = releaseNoticeKey(account);
+  if(dismissedReleaseNotices.has(key)) return;
+  try { if(localStorage.getItem(key)==='1') return; } catch(e) {}
+  const dlg = document.getElementById('releaseNoticeModal');
+  if(!dlg || dlg.open) return;
+  dlg.innerHTML = '<div class="modal-head"><div class="modal-head-text"><h2 id="releaseNoticeTitle">v1.1.0 更新：翻研</h2><p>用自己感兴趣的文章练习翻译。</p></div><button class="icon-btn modal-close" data-release-close aria-label="关闭">'+icon('x',17)+'</button></div>'+
+    '<div class="modal-body"><div class="guide-list">'+
+    '<div class="guide-li"><span class="bullet"></span><div>上传 TXT 或 DOCX 文件，或粘贴文本，使用自选文章练习。</div></div>'+
+    '<div class="guide-li"><span class="bullet"></span><div>支持中译英和英译汉，逐句练习并查看反馈。</div></div>'+
+    '<div class="guide-li"><span class="bullet"></span><div>原有背词、词库、错题等功能继续保留。</div></div></div></div>'+
+    '<div class="modal-foot"><button class="btn btn-primary" data-release-close>知道了</button></div>';
+  function dismiss(){
+    dismissedReleaseNotices.add(key);
+    try { localStorage.setItem(key,'1'); } catch(e) {}
+    if(dlg.open) dlg.close();
+  }
+  dlg.querySelectorAll('[data-release-close]').forEach(function(button){ button.onclick=dismiss; });
+  dlg.oncancel=function(e){ e.preventDefault(); dismiss(); };
+  dlg.onclick=function(e){ if(e.target===dlg) dismiss(); };
+  try { dlg.showModal(); } catch(e) { /* A notice must never block entry. */ }
+}
+
 /* ============================================================
    WELCOME
    ============================================================ */
@@ -3968,7 +4004,8 @@ function openWelcome(){
 function dismissWelcome(){
   const dlg = document.getElementById('welcomeModal');
   if(dlg && dlg.open) dlg.close();
-  if(state.firstRun){ state.firstRun = false; saveState(); }
+  if(state && state.firstRun){ state.firstRun = false; saveState(); }
+  showReleaseNotice(currentAccount);
 }
 function downloadTemplate(e){
   if(e) e.preventDefault();
@@ -4163,7 +4200,7 @@ function deleteLibrary(){
   });
 }
 document.addEventListener('keydown', function(e){
-  if(document.getElementById('appModal').open || document.getElementById('welcomeModal').open || document.getElementById('confirmModal').open) return;
+  if(document.getElementById('appModal').open || document.getElementById('welcomeModal').open || document.getElementById('releaseNoticeModal').open || document.getElementById('confirmModal').open) return;
   if(ui.page!=='quiz' || !ui.quiz || ui.quiz.finished) return;
   const q = ui.quiz.questions[ui.quiz.idx];
   if(!q) return;
