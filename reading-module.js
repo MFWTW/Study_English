@@ -100,7 +100,27 @@
     return out.slice(0, 20);
   }
   function sentences(text) {
-    return (text.match(/[^.!?。！？\n]+(?:[.!?。！？]+[”’"']*)?|[.!?。！？]+|\n+/g) || []);
+    const parts = []; let start = 0;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (ch === '\n') { if (i > start) parts.push(text.slice(start, i)); parts.push('\n'); start = i + 1; continue; }
+      if (!/[.!?。！？]/.test(ch)) continue;
+      if (ch === '.') {
+        const before = text.slice(start, i), after = text.slice(i + 1);
+        // Periods inside numbers, names or domains do not end a sentence.
+        if (/[A-Za-z0-9]/.test(text[i - 1] || '') && /[A-Za-z0-9]/.test(text[i + 1] || '')) continue;
+        // Common titles and initials before a person's name are not sentence endings.
+        if (/\b(?:Mr|Mrs|Ms|Miss|Dr|Prof|Rev|St|Sr|Jr|Gen|Col|Lt|Sgt|Capt)\.?(?:\s*)$/i.test(before) && /^\s+\S/.test(after)) continue;
+        if (/(?:^|\s)[A-Z]$/.test(before) && /^\s+[A-Z]/.test(after)) continue;
+        // Common multi-period abbreviations can be followed by the rest of a sentence.
+        if (/\b(?:[A-Za-z]\.)+[A-Za-z]$/.test(before) && /^\s+[a-z]/.test(after)) continue;
+      }
+      while (i + 1 < text.length && /[.!?。！？]/.test(text[i + 1])) i++;
+      while (i + 1 < text.length && /[”’"']/.test(text[i + 1])) i++;
+      parts.push(text.slice(start, i + 1)); start = i + 1;
+    }
+    if (start < text.length) parts.push(text.slice(start));
+    return parts;
   }
   function tokens(text, index) {
     return text.split(/([A-Za-z]+(?:['’\-][A-Za-z]+)*)/g).map(function (part, i) {

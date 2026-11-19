@@ -1,6 +1,6 @@
 /* Offline shell only. Change VERSION whenever any listed file changes. */
 'use strict';
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const PREFIX = 'yingyan-static:' + encodeURIComponent(self.registration.scope) + ':';
 const CACHE = PREFIX + VERSION;
 const FILES = [
