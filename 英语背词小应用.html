@@ -1253,6 +1253,7 @@ function logoutAccount(){
     confirmText:'退出登录'
   }).then(function(ok){
     if(!ok) return;
+    cancelPendingSpeech();
     closeModal();
     try{ sessionStorage.removeItem(SESSION_ACCOUNT_KEY); }catch(e){}
     stopCloudSync();
@@ -2303,7 +2304,7 @@ function go(page){
   if(ui.page==='quiz' && ui.quiz && !ui.quiz.finished && page!=='quiz'){
     clearTimeout(ui.autoNextTimer);
     askConfirm({title:'退出本次练习？', message:'当前答题进度会保留在本次会话中；已答题目已经计入统计和错题本。', confirmText:'退出练习', danger:true}).then(function(ok){
-      if(ok){ ui.quiz=null; ui.page=page; window.scrollTo({top:0,behavior:'smooth'}); render(); }
+      if(ok){ cancelPendingSpeech(); ui.quiz=null; ui.page=page; window.scrollTo({top:0,behavior:'smooth'}); render(); }
     });
     return;
   }
@@ -2698,7 +2699,7 @@ function openSettings(){
       '<p class="hint" style="margin:8px 0 14px">云账号以云端数据为准；网络异常或多设备同时编辑时，同步可能延迟，未上传的本机更改不会自动合并。请定期导出 JSON 备份。</p>'+
       '<div class="settings-grid">'+
         '<div class="field"><label for="setGoal">每日目标（词）</label><input class="input" type="number" id="setGoal" min="5" max="200" step="5" value="'+state.settings.dailyGoal+'"></div>'+
-        '<div class="field"><label>答题辅助</label><label class="check-row" style="height:40px"><input type="checkbox" id="setSound" '+(state.settings.sound?'checked':'')+'> 自动发音（英译汉切题读一次）</label></div>'+
+        '<div class="field"><label>答题辅助</label><label class="check-row" style="height:40px"><input type="checkbox" id="setSound" '+(state.settings.sound?'checked':'')+'> 自动发音（英译汉显示题目时、汉译英答题后朗读）</label></div>'+
       '</div>'+
       '<label class="check-row" style="margin-top:10px"><input type="checkbox" id="setAutoNext" '+(state.settings.autoNext?'checked':'')+'> 答题后自动进入下一题（答错会多停留一会儿）</label>'+
       '<label class="check-row" style="margin-top:8px"><input type="checkbox" id="setShuffle" '+(state.settings.shuffle?'checked':'')+'> 每轮练习随机打乱词序（默认关闭，按词库顺序出题）</label>'+
@@ -3357,6 +3358,7 @@ function buildQuestion(word, mode, lib){
   return q;
 }
 function startQuiz(opts){
+  cancelPendingSpeech();
   opts = opts || {};
   const lib = getLib(opts.libId || state.activeLibraryId);
   if(!lib) { toast('没有可用词库','error'); return; }
@@ -3531,10 +3533,10 @@ function afterQuizRender(){
   if(state.settings.sound){
     if(q.mode==='en2cn' && !q.answered && !q.promptSpoken){
       q.promptSpoken = true;
-      speakWord(q.word.en);
+      speakWord(q.word.en, true);
     }else if(q.answered && q.mode!=='en2cn' && !q.answerSpoken){
       q.answerSpoken = true;
-      speakWord(q.word.en);
+      speakWord(q.word.en, true);
     }
   }
   if(q.answered && state.settings.autoNext){
@@ -3615,6 +3617,7 @@ function recordLearning(word, correct){
   return outcome;
 }
 function nextQuestion(){
+  cancelPendingSpeech();
   clearTimeout(ui.autoNextTimer);
   const quiz = ui.quiz;
   if(!quiz || quiz.finished) return;
@@ -3626,6 +3629,7 @@ function nextQuestion(){
   }
 }
 function finishQuiz(){
+  cancelPendingSpeech();
   const quiz = ui.quiz;
   if(!quiz || quiz.finished) return;
   clearTimeout(ui.autoNextTimer);
@@ -3682,10 +3686,10 @@ function retryWrong(){
 }
 function exitQuiz(){
   clearTimeout(ui.autoNextTimer);
-  if(!ui.quiz){ ui.page='home'; render(); return; }
-  if(ui.quiz.finished){ ui.quiz=null; ui.page='home'; render(); return; }
+  if(!ui.quiz){ cancelPendingSpeech(); ui.page='home'; render(); return; }
+  if(ui.quiz.finished){ cancelPendingSpeech(); ui.quiz=null; ui.page='home'; render(); return; }
   askConfirm({title:'退出本次练习？',message:'已答题目已经保存到学习记录和错题本，未答题目不会计入。',confirmText:'退出练习',danger:true}).then(function(ok){
-    if(ok){ clearTimeout(ui.autoNextTimer); ui.quiz=null; ui.page='home'; render(); }
+    if(ok){ cancelPendingSpeech(); clearTimeout(ui.autoNextTimer); ui.quiz=null; ui.page='home'; render(); }
   });
 }
 function toggleWeak(wordId){
@@ -3695,33 +3699,42 @@ function toggleWeak(wordId){
   saveState();
   return s.weak;
 }
-function speakWord(text){
-  if(!('speechSynthesis' in window)){ toast('当前浏览器不支持语音朗读','error'); return; }
-  try{
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(String(text||''));
-    u.lang = 'en-US'; u.rate = .86; u.pitch = 1;
-    const voices = window.speechSynthesis.getVoices();
-    const en = voices.find(function(v){return /en[-_]US/i.test(v.lang);}) || voices.find(function(v){return /^en/i.test(v.lang);});
-    if(en) u.voice = en;
-    window.speechSynthesis.speak(u);
-  }catch(e){ /* speech is a bonus, never block the quiz */ }
+// A newer request invalidates pending callbacks and errors from older utterances.
+let speechTimer = null;
+let speechRequest = 0;
+function cancelPendingSpeech(){
+  speechRequest++;
+  clearTimeout(speechTimer);
+  speechTimer = null;
+  try{ if(window.speechSynthesis) window.speechSynthesis.cancel(); }catch(e){}
 }
-// Longer text (a whole sentence) needs a gentler rate; iOS also drops a speak()
-// issued in the same tick as cancel(), so the call is deferred slightly.
-function speakText(text, rate){
+function speakWord(text, silent){ speakText(text, .86, silent); }
+function speakText(text, rate, silent){
   const value = String(text||'').trim();
   if(!value) return;
-  if(!('speechSynthesis' in window)){ toast('当前浏览器不支持语音朗读','error'); return; }
-  try{
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(value);
-    u.lang = 'en-US'; u.rate = rate || (/[.!?]/.test(value) && value.split(/\s+/).length > 4 ? .88 : .86); u.pitch = 1;
-    const voices = window.speechSynthesis.getVoices();
-    const en = voices.find(function(v){return /en[-_]US/i.test(v.lang);}) || voices.find(function(v){return /^en/i.test(v.lang);});
-    if(en) u.voice = en;
-    setTimeout(function(){ try{ window.speechSynthesis.speak(u); }catch(e){} }, 60);
-  }catch(e){ toast('朗读失败，请检查系统语音设置','error'); }
+  cancelPendingSpeech();
+  const request = speechRequest;
+  function fail(){
+    if(request===speechRequest && !silent) toast('朗读失败，请检查设备音量、浏览器和系统英语语音设置','error');
+  }
+  if(!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance==='undefined'){
+    if(!silent) toast('当前浏览器不支持语音朗读','error');
+    return;
+  }
+  // iOS can drop a new utterance issued in the same tick as cancel().
+  speechTimer = setTimeout(function(){
+    if(request!==speechRequest) return;
+    speechTimer = null;
+    try{
+      const u = new SpeechSynthesisUtterance(value);
+      u.lang = 'en-US'; u.rate = rate || (/[.!?]/.test(value) && value.split(/\s+/).length > 4 ? .88 : .86); u.pitch = 1;
+      const voices = window.speechSynthesis.getVoices() || [];
+      const en = voices.find(function(v){return /en[-_]US/i.test(v.lang);}) || voices.find(function(v){return /^en/i.test(v.lang);});
+      if(en) u.voice = en;
+      u.onerror = function(e){ if(!e || (e.error!=='canceled' && e.error!=='interrupted')) fail(); };
+      window.speechSynthesis.speak(u);
+    }catch(e){ fail(); }
+  }, 60);
 }
 
 /* ============================================================
