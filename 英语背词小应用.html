@@ -3934,6 +3934,11 @@ function renderGuide(){
           '<div class="guide-li"><span class="bullet"></span><div>原有 AI 生成中译英练习仍在下方：可选词库、句研比例及参考文章。自选文章使用原文，不会先由 AI 改写。</div></div>'+
           '<div class="guide-li"><span class="bullet"></span><div>提交反馈需要联网和有效的 DeepSeek API Key，原文与译文会发送给 AI 服务，请勿提交敏感或无权分享的内容。</div></div>'+
         '</div></section>'+
+        '<section class="card guide-card"><h3>'+icon('practice',17)+'句研：句库与翻译练习</h3><div class="guide-list">'+
+          '<div class="guide-li"><span class="bullet"></span><div>在「我的句库」中查看句子；已保存的解析默认折叠，点击「展开解析」或「收起解析」切换。</div></div>'+
+          '<div class="guide-li"><span class="bullet"></span><div>在「翻译练习」选择全部句子、未分类或指定句库，以及英译汉或汉译英，逐句输入译文并提交；汉译英会跳过缺少中文译文的句子。</div></div>'+
+          '<div class="guide-li"><span class="bullet"></span><div>提交评判需要联网和有效的 DeepSeek API Key，题目、参考译文和你的答案会发送给 AI 服务，请勿提交敏感或无权分享的内容。AI 结果可能有误，请自行核对。</div></div>'+
+        '</div></section>'+
         '<section class="card guide-card"><h3>'+icon('star',17)+'薄弱词与掌握度</h3><div class="lead">用两种方式标记薄弱词，系统会优先安排复习。</div><div class="guide-list">'+
           '<div class="guide-li"><span class="bullet"></span><div><b>手动星标：</b>词库列表或答题反馈里点星形按钮，随时标记或取消。</div></div>'+
           '<div class="guide-li"><span class="bullet"></span><div><b>自动标记：</b>同一个词累计答错 2 次，自动加入薄弱词，并在标签中提示。</div></div>'+
@@ -3968,7 +3973,7 @@ function renderGuide(){
 }
 
 /* Release notice is deliberately separate from learning and cloud state. */
-const RELEASE_NOTICE_VERSION = '1.1.0';
+const RELEASE_NOTICE_VERSION = '1.1.5';
 const dismissedReleaseNotices = new Set();
 function releaseNoticeKey(account){ return 'ciyan_release_notice_'+RELEASE_NOTICE_VERSION+'_'+encodeURIComponent(account.id); }
 function showReleaseNotice(account){
@@ -3978,11 +3983,11 @@ function showReleaseNotice(account){
   try { if(localStorage.getItem(key)==='1') return; } catch(e) {}
   const dlg = document.getElementById('releaseNoticeModal');
   if(!dlg || dlg.open) return;
-  dlg.innerHTML = '<div class="modal-head"><div class="modal-head-text"><h2 id="releaseNoticeTitle">v1.1.0 更新：翻研</h2><p>用自己感兴趣的文章练习翻译。</p></div><button class="icon-btn modal-close" data-release-close aria-label="关闭">'+icon('x',17)+'</button></div>'+
+  dlg.innerHTML = '<div class="modal-head"><div class="modal-head-text"><h2 id="releaseNoticeTitle">v1.1.5 更新：句研</h2><p>句子解析更清爽，翻译练习更灵活。</p></div><button class="icon-btn modal-close" data-release-close aria-label="关闭">'+icon('x',17)+'</button></div>'+
     '<div class="modal-body"><div class="guide-list">'+
-    '<div class="guide-li"><span class="bullet"></span><div>上传 TXT 或 DOCX 文件，或粘贴文本，使用自选文章练习。</div></div>'+
-    '<div class="guide-li"><span class="bullet"></span><div>支持中译英和英译汉，逐句练习并查看反馈。</div></div>'+
-    '<div class="guide-li"><span class="bullet"></span><div>原有背词、词库、错题等功能继续保留。</div></div></div></div>'+
+    '<div class="guide-li"><span class="bullet"></span><div>句子解析默认折叠，可随时展开或收起已保存的解析。</div></div>'+
+    '<div class="guide-li"><span class="bullet"></span><div>选择全部句子、未分类或指定句库，逐句练习英译汉或汉译英；汉译英会跳过没有中文译文的句子。</div></div>'+
+    '<div class="guide-li"><span class="bullet"></span><div>提交后由 DeepSeek 评判，需要联网和有效的 API Key；题目、参考译文和你的答案会发送给 AI 服务，请勿提交敏感或无权分享的内容。AI 结果可能有误，请自行核对。</div></div></div></div>'+
     '<div class="modal-foot"><button class="btn btn-primary" data-release-close>知道了</button></div>';
   function dismiss(){
     dismissedReleaseNotices.add(key);
