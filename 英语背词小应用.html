@@ -3928,14 +3928,19 @@ function renderGuide(){
         '</section>'+
       '</div>'+
       '<div class="stack" style="gap:17px">'+
+        '<section class="card guide-card"><h3>'+icon('book',17)+'阅研：阅读与句子解析</h3><div class="guide-list">'+
+          '<div class="guide-li"><span class="bullet"></span><div>粘贴英文文章或导入 TXT、DOCX，开始阅读；文章可从「我的历史阅读库」再次打开。</div></div>'+
+          '<div class="guide-li"><span class="bullet"></span><div>点击单词查询释义，可编辑后保存到词研错题本；点击句子选中，再点「翻译并解析选中句子」，也可长按句子直接解析。单词和句子均可朗读。</div></div>'+
+          '<div class="guide-li"><span class="bullet"></span><div>解析可展示句子结构、语块翻译连线图和语法讲解：先看主干，再看与其关联的修饰语块；主干较长时可横向滚动。识别出的固定搭配可逐条收藏到错题本，句子可收藏到句研。</div></div>'+
+        '</div></section>'+
         '<section class="card guide-card"><h3>'+icon('guide',17)+'翻研：自选文章翻译</h3><div class="guide-list">'+
           '<div class="guide-li"><span class="bullet"></span><div>在「翻研」的「自选文章练习」中选择中译英或英译汉，粘贴原文或上传 TXT、DOCX 文件，检查文字后点击「开始自选文章练习」。文件只提取文字，不保证保留格式。</div></div>'+
-          '<div class="guide-li"><span class="bullet"></span><div>填写自己的译文并提交，AI 会给出逐句反馈和参考译文；可修改并提交译文、将英文句子加入句研，或在历史翻译库中继续练习。AI 结果可能有误，请自行核对。</div></div>'+
+          '<div class="guide-li"><span class="bullet"></span><div>填写译文并提交后查看逐句反馈、参考译文、语块连线图与语法讲解；点击解析中的英文单词可查词并编辑释义，保存到错题本。可将英文句子加入句研，或在历史翻译库中继续练习。AI 结果可能有误，请自行核对。</div></div>'+
           '<div class="guide-li"><span class="bullet"></span><div>原有 AI 生成中译英练习仍在下方：可选词库、句研比例及参考文章。自选文章使用原文，不会先由 AI 改写。</div></div>'+
           '<div class="guide-li"><span class="bullet"></span><div>提交反馈需要联网和有效的 DeepSeek API Key，原文与译文会发送给 AI 服务，请勿提交敏感或无权分享的内容。</div></div>'+
         '</div></section>'+
         '<section class="card guide-card"><h3>'+icon('practice',17)+'句研：句库与翻译练习</h3><div class="guide-list">'+
-          '<div class="guide-li"><span class="bullet"></span><div>在「我的句库」中查看句子；已保存的解析默认折叠，点击「展开解析」或「收起解析」切换。</div></div>'+
+          '<div class="guide-li"><span class="bullet"></span><div>在「我的句库」中查看句子并点击「DeepSeek 解析」；已保存的解析默认折叠，点击「展开解析」或「收起解析」切换。解析可展示语块连线图、主干与修饰关系和固定搭配；点击句中单词可查词并保存到错题本。</div></div>'+
           '<div class="guide-li"><span class="bullet"></span><div>在「翻译练习」选择全部句子、未分类或指定句库，以及英译汉或汉译英，逐句输入译文并提交；汉译英会跳过缺少中文译文的句子。</div></div>'+
           '<div class="guide-li"><span class="bullet"></span><div>提交评判需要联网和有效的 DeepSeek API Key，题目、参考译文和你的答案会发送给 AI 服务，请勿提交敏感或无权分享的内容。AI 结果可能有误，请自行核对。</div></div>'+
         '</div></section>'+
@@ -3973,7 +3978,7 @@ function renderGuide(){
 }
 
 /* Release notice is deliberately separate from learning and cloud state. */
-const RELEASE_NOTICE_VERSION = '1.1.5';
+const RELEASE_NOTICE_VERSION = '1.2.0';
 const dismissedReleaseNotices = new Set();
 function releaseNoticeKey(account){ return 'ciyan_release_notice_'+RELEASE_NOTICE_VERSION+'_'+encodeURIComponent(account.id); }
 function showReleaseNotice(account){
@@ -3983,11 +3988,12 @@ function showReleaseNotice(account){
   try { if(localStorage.getItem(key)==='1') return; } catch(e) {}
   const dlg = document.getElementById('releaseNoticeModal');
   if(!dlg || dlg.open) return;
-  dlg.innerHTML = '<div class="modal-head"><div class="modal-head-text"><h2 id="releaseNoticeTitle">v1.1.5 更新：句研</h2><p>句子解析更清爽，翻译练习更灵活。</p></div><button class="icon-btn modal-close" data-release-close aria-label="关闭">'+icon('x',17)+'</button></div>'+
+  dlg.innerHTML = '<div class="modal-head"><div class="modal-head-text"><h2 id="releaseNoticeTitle">v1.2.0 更新：阅读与句子研习</h2><p>从阅读、句子到翻译，用语块看清句子结构。</p></div><button class="icon-btn modal-close" data-release-close aria-label="关闭">'+icon('x',17)+'</button></div>'+
     '<div class="modal-body"><div class="guide-list">'+
-    '<div class="guide-li"><span class="bullet"></span><div>句子解析默认折叠，可随时展开或收起已保存的解析。</div></div>'+
-    '<div class="guide-li"><span class="bullet"></span><div>选择全部句子、未分类或指定句库，逐句练习英译汉或汉译英；汉译英会跳过没有中文译文的句子。</div></div>'+
-    '<div class="guide-li"><span class="bullet"></span><div>提交后由 DeepSeek 评判，需要联网和有效的 API Key；题目、参考译文和你的答案会发送给 AI 服务，请勿提交敏感或无权分享的内容。AI 结果可能有误，请自行核对。</div></div></div></div>'+
+    '<div class="guide-li"><span class="bullet"></span><div><b>阅研：</b>导入或粘贴文章，点击单词查词，点击句子后解析或长按句子直接解析；单词、句子与识别出的固定搭配可按需收藏。</div></div>'+
+    '<div class="guide-li"><span class="bullet"></span><div><b>语块图与交互：</b>阅研、句研和翻研的句子解析可展示语块翻译连线图、主干与修饰关系；句研和翻研解析中的英文单词可点击查词、编辑释义并保存到错题本。</div></div>'+
+    '<div class="guide-li"><span class="bullet"></span><div><b>句研与翻研：</b>句库解析可展开或收起；句研支持选择句库进行双向翻译练习，翻研支持自选文章和逐句反馈。具体操作见「使用说明」。</div></div>'+
+    '<div class="guide-li"><span class="bullet"></span><div>AI 查词、解析和评判需要联网及有效的 DeepSeek API Key，相关学习材料与答案会发送给 AI 服务；请勿提交敏感或无权分享的内容。AI 结果可能有误，请自行核对。</div></div></div></div>'+
     '<div class="modal-foot"><button class="btn btn-primary" data-release-close>知道了</button></div>';
   function dismiss(){
     dismissedReleaseNotices.add(key);
